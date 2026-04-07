@@ -36,6 +36,7 @@ PackRuntime::~PackRuntime() {
 }
 
 PackRuntime::PackRuntime(PackRuntime&& other) noexcept {
+    std::cerr << "[PackRuntime::move_constructor] Moving pack runtime" << std::endl;
     handle_ = other.handle_;
     instance_ = other.instance_;
     other.handle_ = nullptr;
@@ -43,6 +44,7 @@ PackRuntime::PackRuntime(PackRuntime&& other) noexcept {
 }
 
 PackRuntime& PackRuntime::operator=(PackRuntime&& other) noexcept {
+    std::cerr << "[PackRuntime::move_assignment] Move assigning pack runtime" << std::endl;
     if (this != &other) {
         unload();
         handle_ = other.handle_;
@@ -54,17 +56,22 @@ PackRuntime& PackRuntime::operator=(PackRuntime&& other) noexcept {
 }
 
 void PackRuntime::load(const std::filesystem::path& pack_root, const PackManifest& manifest, const std::filesystem::path& state_dir) {
+    std::cerr << "[PackRuntime::load] Starting pack load from " << pack_root << std::endl;
     unload();
 
     const auto library_path = manifest.libraryPath(pack_root);
+    std::cerr << "[PackRuntime::load] Loading library: " << library_path << std::endl;
     handle_ = dlopen(library_path.string().c_str(), RTLD_NOW);
     if (!handle_) {
         throw std::runtime_error(std::string("Failed to load pack library: ") + dlerror());
     }
+    std::cerr << "[PackRuntime::load] Library loaded successfully" << std::endl;
 
     const auto get_abi = resolveSymbol<GetAbiFn>(handle_, "edgeai_pack_get_abi_version");
     const auto create = resolveSymbol<CreateFn>(handle_, "edgeai_pack_create");
-    if (get_abi() != EDGEAI_PACK_ABI_V1) {
+    int abi_version = get_abi();
+    std::cerr << "[PackRuntime::load] ABI version: " << abi_version << std::endl;
+    if (abi_version != EDGEAI_PACK_ABI_V1) {
         unload();
         throw std::runtime_error("Pack ABI mismatch");
     }
@@ -78,28 +85,35 @@ void PackRuntime::load(const std::filesystem::path& pack_root, const PackManifes
     };
 
     EdgeAIPackInstanceV1* instance = nullptr;
+    std::cerr << "[PackRuntime::load] Creating pack instance" << std::endl;
     if (create(&host, &instance) != 0 || instance == nullptr) {
         unload();
         throw std::runtime_error("Pack factory failed to create instance");
     }
+    std::cerr << "[PackRuntime::load] Pack instance created" << std::endl;
 
     instance_ = instance;
     if (instance_->activate && instance_->activate(instance_->user_data, "{}") != 0) {
         unload();
         throw std::runtime_error("Pack activation failed");
     }
+    std::cerr << "[PackRuntime::load] Pack activated successfully" << std::endl;
 }
 
 void PackRuntime::configure(const std::string& config_json) {
+    std::cerr << "[PackRuntime::configure] Starting pack configuration" << std::endl;
     if (!instance_ || !instance_->configure) {
+        std::cerr << "[PackRuntime::configure] Configure not available, skipping" << std::endl;
         return;
     }
     if (instance_->configure(instance_->user_data, config_json.c_str()) != 0) {
         throw std::runtime_error("Pack configuration failed");
     }
+    std::cerr << "[PackRuntime::configure] Configuration completed successfully" << std::endl;
 }
 
 Json::Value PackRuntime::predict(const std::string& prompt, const std::string& options_json) {
+    std::cerr << "[PackRuntime::predict] Starting prediction with prompt: " << prompt << std::endl;
     if (!instance_ || !instance_->predict) {
         throw std::runtime_error("Pack runtime is not loaded");
     }
@@ -112,6 +126,7 @@ Json::Value PackRuntime::predict(const std::string& prompt, const std::string& o
     if (instance_->predict(instance_->user_data, &request, &response) != 0) {
         throw std::runtime_error("Pack prediction failed");
     }
+    std::cerr << "[PackRuntime::predict] Prediction completed, output: " << response.output_text << std::endl;
 
     Json::Value value(Json::objectValue);
     value["result"] = response.output_text;
@@ -120,19 +135,25 @@ Json::Value PackRuntime::predict(const std::string& prompt, const std::string& o
 }
 
 void PackRuntime::unload() {
+    std::cerr << "[PackRuntime::unload] Starting pack unload" << std::endl;
     if (instance_) {
         if (instance_->deactivate) {
+            std::cerr << "[PackRuntime::unload] Deactivating instance" << std::endl;
             instance_->deactivate(instance_->user_data);
         }
         if (instance_->destroy) {
+            std::cerr << "[PackRuntime::unload] Destroying instance" << std::endl;
             instance_->destroy(instance_->user_data);
         }
         delete instance_;
         instance_ = nullptr;
+        std::cerr << "[PackRuntime::unload] Instance cleaned up" << std::endl;
     }
     if (handle_) {
+        std::cerr << "[PackRuntime::unload] Unloading library" << std::endl;
         dlclose(handle_);
         handle_ = nullptr;
+        std::cerr << "[PackRuntime::unload] Library unloaded successfully" << std::endl;
     }
 }
 

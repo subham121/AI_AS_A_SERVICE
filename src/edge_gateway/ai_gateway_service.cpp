@@ -82,6 +82,7 @@ const GDBusInterfaceVTable kInterfaceVTable = {
 }  // namespace
 
 AIGatewayService::AIGatewayService(PackManager& manager) : manager_(manager) {
+    std::cerr << "[AIGatewayService::constructor] Initializing AI Gateway Service" << std::endl;
     manager_.setEventSink(this);
     GError* error = nullptr;
     introspection_data_ = g_dbus_node_info_new_for_xml(kIntrospectionXml, &error);
@@ -92,13 +93,17 @@ AIGatewayService::AIGatewayService(PackManager& manager) : manager_(manager) {
         }
         throw std::runtime_error(message);
     }
+    std::cerr << "[AIGatewayService::constructor] Service initialized successfully" << std::endl;
 }
 
 AIGatewayService::~AIGatewayService() {
+    std::cerr << "[AIGatewayService::destructor] Cleaning up AI Gateway Service" << std::endl;
     if (registration_id_ != 0 && connection_) {
+        std::cerr << "[AIGatewayService::destructor] Unregistering DBus object" << std::endl;
         g_dbus_connection_unregister_object(connection_, registration_id_);
     }
     if (owner_id_ != 0) {
+        std::cerr << "[AIGatewayService::destructor] Releasing bus name" << std::endl;
         g_bus_unown_name(owner_id_);
     }
     if (loop_) {
@@ -107,12 +112,15 @@ AIGatewayService::~AIGatewayService() {
     if (introspection_data_) {
         g_dbus_node_info_unref(introspection_data_);
     }
+    std::cerr << "[AIGatewayService::destructor] Cleanup complete" << std::endl;
 }
 
 void AIGatewayService::publish(const Json::Value& event) {
     if (!connection_) {
+        std::cerr << "[AIGatewayService::publish] No DBus connection, skipping publish" << std::endl;
         return;
     }
+    std::cerr << "[AIGatewayService::publish] Publishing PackStateChanged event" << std::endl;
     const auto payload = toJsonString(event);
     g_dbus_connection_emit_signal(connection_,
                                   nullptr,
@@ -124,6 +132,7 @@ void AIGatewayService::publish(const Json::Value& event) {
 }
 
 void AIGatewayService::run() {
+    std::cerr << "[AIGatewayService::run] Starting AI Gateway service" << std::endl;
     loop_ = g_main_loop_new(nullptr, FALSE);
     owner_id_ = g_bus_own_name(G_BUS_TYPE_SESSION,
                                kBusName,
@@ -133,11 +142,14 @@ void AIGatewayService::run() {
                                &AIGatewayService::onNameLost,
                                this,
                                nullptr);
+    std::cerr << "[AIGatewayService::run] DBus name owner requested, entering main loop" << std::endl;
     g_main_loop_run(loop_);
+    std::cerr << "[AIGatewayService::run] Main loop exited" << std::endl;
 }
 
 void AIGatewayService::onBusAcquired(GDBusConnection* connection, const gchar* /*name*/, gpointer user_data) {
     auto* self = static_cast<AIGatewayService*>(user_data);
+    std::cerr << "[AIGatewayService::onBusAcquired] Bus acquired, registering DBus object" << std::endl;
     self->connection_ = connection;
     GError* error = nullptr;
     self->registration_id_ = g_dbus_connection_register_object(connection,
@@ -152,6 +164,8 @@ void AIGatewayService::onBusAcquired(GDBusConnection* connection, const gchar* /
         if (error) {
             g_error_free(error);
         }
+    } else {
+        std::cerr << "[AIGatewayService::onBusAcquired] DBus object registered successfully" << std::endl;
     }
 }
 
@@ -176,10 +190,13 @@ void AIGatewayService::handleMethodCall(GDBusConnection* /*connection*/,
                                         GDBusMethodInvocation* invocation,
                                         gpointer user_data) {
     auto* self = static_cast<AIGatewayService*>(user_data);
+    std::cerr << "[AIGatewayService::handleMethodCall] Method called: " << method_name << std::endl;
     try {
         Json::Value response = self->dispatch(method_name, parameters);
+        std::cerr << "[AIGatewayService::handleMethodCall] Method " << method_name << " completed successfully" << std::endl;
         g_dbus_method_invocation_return_value(invocation, g_variant_new("(s)", toJsonString(response).c_str()));
     } catch (const std::exception& ex) {
+        std::cerr << "[AIGatewayService::handleMethodCall] Method " << method_name << " failed: " << ex.what() << std::endl;
         Json::Value error = makeStatus("error", ex.what());
         g_dbus_method_invocation_return_value(invocation, g_variant_new("(s)", toJsonString(error).c_str()));
     }
@@ -191,6 +208,7 @@ Json::Value AIGatewayService::dispatch(const std::string& method, GVariant* para
         const gchar* intent = nullptr;
         const gchar* device_json = nullptr;
         g_variant_get(parameters, "(&s&s&s)", &user_id, &intent, &device_json);
+        std::cerr << "[dispatch::QueryPacks] user_id=" << (user_id ? user_id : "(null)") << " intent=" << (intent ? intent : "(null)") << std::endl;
         Json::Value response = manager_.queryPacks(intent, parseJson(device_json));
         response["user_id"] = user_id;
         return response;
@@ -200,18 +218,21 @@ Json::Value AIGatewayService::dispatch(const std::string& method, GVariant* para
         const gchar* pack_id = nullptr;
         gboolean approve = FALSE;
         g_variant_get(parameters, "(&s&sb)", &user_id, &pack_id, &approve);
+        std::cerr << "[dispatch::InstallPack] user_id=" << (user_id ? user_id : "(null)") << " pack_id=" << (pack_id ? pack_id : "(null)") << " approve=" << approve << std::endl;
         return manager_.installPack(user_id, pack_id, approve);
     }
     if (method == "EnablePack") {
         const gchar* user_id = nullptr;
         const gchar* pack_id = nullptr;
         g_variant_get(parameters, "(&s&s)", &user_id, &pack_id);
+        std::cerr << "[dispatch::EnablePack] user_id=" << (user_id ? user_id : "(null)") << " pack_id=" << (pack_id ? pack_id : "(null)") << std::endl;
         return manager_.enablePack(user_id, pack_id);
     }
     if (method == "LoadPack") {
         const gchar* user_id = nullptr;
         const gchar* pack_id = nullptr;
         g_variant_get(parameters, "(&s&s)", &user_id, &pack_id);
+        std::cerr << "[dispatch::LoadPack] user_id=" << (user_id ? user_id : "(null)") << " pack_id=" << (pack_id ? pack_id : "(null)") << std::endl;
         return manager_.loadPack(user_id, pack_id);
     }
     if (method == "Invoke") {
@@ -220,18 +241,21 @@ Json::Value AIGatewayService::dispatch(const std::string& method, GVariant* para
         const gchar* prompt = nullptr;
         const gchar* options_json = nullptr;
         g_variant_get(parameters, "(&s&s&s&s)", &user_id, &pack_id, &prompt, &options_json);
+        std::cerr << "[dispatch::Invoke] user_id=" << (user_id ? user_id : "(null)") << " pack_id=" << (pack_id ? pack_id : "(null)") << " prompt=" << (prompt ? prompt : "(null)") << std::endl;
         return manager_.invoke(user_id, pack_id, prompt, options_json);
     }
     if (method == "UnloadPack") {
         const gchar* user_id = nullptr;
         const gchar* pack_id = nullptr;
         g_variant_get(parameters, "(&s&s)", &user_id, &pack_id);
+        std::cerr << "[dispatch::UnloadPack] user_id=" << (user_id ? user_id : "(null)") << " pack_id=" << (pack_id ? pack_id : "(null)") << std::endl;
         return manager_.unloadPack(user_id, pack_id);
     }
     if (method == "DisablePack") {
         const gchar* user_id = nullptr;
         const gchar* pack_id = nullptr;
         g_variant_get(parameters, "(&s&s)", &user_id, &pack_id);
+        std::cerr << "[dispatch::DisablePack] user_id=" << (user_id ? user_id : "(null)") << " pack_id=" << (pack_id ? pack_id : "(null)") << std::endl;
         return manager_.disablePack(user_id, pack_id);
     }
     if (method == "UninstallPack") {
@@ -239,12 +263,14 @@ Json::Value AIGatewayService::dispatch(const std::string& method, GVariant* para
         const gchar* pack_id = nullptr;
         gboolean force_shared = FALSE;
         g_variant_get(parameters, "(&s&sb)", &user_id, &pack_id, &force_shared);
+        std::cerr << "[dispatch::UninstallPack] user_id=" << (user_id ? user_id : "(null)") << " pack_id=" << (pack_id ? pack_id : "(null)") << " force_shared=" << force_shared << std::endl;
         return manager_.uninstallPack(user_id, pack_id, force_shared);
     }
     if (method == "RollbackPack") {
         const gchar* user_id = nullptr;
         const gchar* pack_id = nullptr;
         g_variant_get(parameters, "(&s&s)", &user_id, &pack_id);
+        std::cerr << "[dispatch::RollbackPack] user_id=" << (user_id ? user_id : "(null)") << " pack_id=" << (pack_id ? pack_id : "(null)") << std::endl;
         return manager_.rollbackPack(user_id, pack_id);
     }
     throw std::runtime_error("Unsupported method: " + method);
