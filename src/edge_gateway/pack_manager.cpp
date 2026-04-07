@@ -252,13 +252,16 @@ Json::Value PackManager::loadPack(const std::string& user_id, const std::string&
         publishEvent("load", "load_failed_disabled", pack_id, user_id);
         return makeStatus("error", "Pack is disabled, cannot load");
     }
-    if (state == "Loaded" && runtimes_.find(runtimeKey(user_id, pack_id)) != runtimes_.end()) {
-        return makeStatus("ok", "Pack already loaded");
+    const std::string key = runtimeKey(user_id, pack_id);
+    if (state == "Loaded") {
+        std::lock_guard<std::mutex> lock(runtimes_mutex_);
+        if (runtimes_.find(key) != runtimes_.end()) {
+            return makeStatus("ok", "Pack already loaded");
+        }
     }
 
     const Json::Value pack_entry = registry["packs"][pack_id];
     const PackManifest manifest = loadInstalledManifest(pack_entry);
-    const std::string key = runtimeKey(user_id, pack_id);
 
     const int abi_version = PackRuntime::readAbiVersion(packRootFor(pack_entry), manifest);
     if (abi_version != EDGEAI_PACK_ABI_V1) {
@@ -278,7 +281,10 @@ Json::Value PackManager::loadPack(const std::string& user_id, const std::string&
         } else {
             runtime.configure("{}");
         }
-        runtimes_[key] = std::move(runtime);
+        {
+            std::lock_guard<std::mutex> lock(runtimes_mutex_);
+            runtimes_[key] = std::move(runtime);
+        }
 
         auto& user_entry = userPackEntry(registry, user_id, pack_id);
         user_entry["status"] = "Loaded";
@@ -299,12 +305,15 @@ Json::Value PackManager::invoke(const std::string& user_id, const std::string& p
     Json::Value registry = loadRegistry();
     const std::string key = runtimeKey(user_id, pack_id);
     const std::string state = userPackState(registry, user_id, pack_id);
-    if (state != "Loaded" || runtimes_.find(key) == runtimes_.end()) {
-        publishEvent("usage", "loading_required", pack_id, user_id);
-        return makeStatus("error", "Loading Phase should be initiated before usage");
+    Json::Value result;
+    {
+        std::lock_guard<std::mutex> lock(runtimes_mutex_);
+        if (state != "Loaded" || runtimes_.find(key) == runtimes_.end()) {
+            publishEvent("usage", "loading_required", pack_id, user_id);
+            return makeStatus("error", "Loading Phase should be initiated before usage");
+        }
+        result = runtimes_.at(key).predict(prompt, options_json);
     }
-
-    Json::Value result = runtimes_.at(key).predict(prompt, options_json);
     auto& user_entry = userPackEntry(registry, user_id, pack_id);
     user_entry["last_invoked_prompt"] = prompt;
     storeRegistry(registry);
@@ -323,10 +332,13 @@ Json::Value PackManager::unloadPack(const std::string& user_id, const std::strin
         return makeStatus("skipped", "Pack is not loaded");
     }
     const std::string key = runtimeKey(user_id, pack_id);
-    auto it = runtimes_.find(key);
-    if (it != runtimes_.end()) {
-        it->second.unload();
-        runtimes_.erase(it);
+    {
+        std::lock_guard<std::mutex> lock(runtimes_mutex_);
+        auto it = runtimes_.find(key);
+        if (it != runtimes_.end()) {
+            it->second.unload();
+            runtimes_.erase(it);
+        }
     }
     auto& user_entry = userPackEntry(registry, user_id, pack_id);
     user_entry["status"] = "Unloaded";
@@ -393,7 +405,12 @@ Json::Value PackManager::rollbackPack(const std::string& user_id, const std::str
 
     const auto previous = rollback["history"][pack_id][rollback["history"][pack_id].size() - 1];
     Json::Value registry = loadRegistry();
-    if (runtimes_.find(runtimeKey(user_id, pack_id)) != runtimes_.end()) {
+    bool loaded = false;
+    {
+        std::lock_guard<std::mutex> lock(runtimes_mutex_);
+        loaded = runtimes_.find(runtimeKey(user_id, pack_id)) != runtimes_.end();
+    }
+    if (loaded) {
         unloadPack(user_id, pack_id);
         registry = loadRegistry();
     }
@@ -408,6 +425,7 @@ Json::Value PackManager::rollbackPack(const std::string& user_id, const std::str
 }
 
 Json::Value PackManager::loadRegistry() const {
+    std::lock_guard<std::mutex> lock(registry_mutex_);
     if (!std::filesystem::exists(registry_path_)) {
         return emptyRegistry();
     }
@@ -415,10 +433,12 @@ Json::Value PackManager::loadRegistry() const {
 }
 
 void PackManager::storeRegistry(const Json::Value& registry) const {
+    std::lock_guard<std::mutex> lock(registry_mutex_);
     writeTextFile(registry_path_, toJsonString(registry, true));
 }
 
 Json::Value PackManager::loadRollbackRegistry() const {
+    std::lock_guard<std::mutex> lock(rollback_mutex_);
     if (!std::filesystem::exists(rollback_path_)) {
         return emptyRollbackRegistry();
     }
@@ -426,6 +446,7 @@ Json::Value PackManager::loadRollbackRegistry() const {
 }
 
 void PackManager::storeRollbackRegistry(const Json::Value& registry) const {
+    std::lock_guard<std::mutex> lock(rollback_mutex_);
     writeTextFile(rollback_path_, toJsonString(registry, true));
 }
 

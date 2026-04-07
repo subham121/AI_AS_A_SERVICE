@@ -134,8 +134,9 @@ The sample pack:
 
 - Exports a stable C ABI defined in `include/edgeai/pack_abi.h`
 - Loads metadata from `packs/next_word/manifest.json`
-- Uses a tiny ONNX bigram model for next-word prediction
-- Falls back to the embedded transition table if `onnxruntime` is unavailable in the helper environment
+- Uses the ONNX Runtime C++ API to keep model loading and inference in-process
+- Reuses a persisted session with lazy-load, warm-up, and declared model I/O contract checks
+- Falls back to the embedded transition table when the pack is configured for `auto` backend selection and ONNX inference fails
 
 ## Notes
 

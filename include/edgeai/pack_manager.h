@@ -8,6 +8,7 @@
 
 #include <filesystem>
 #include <map>
+#include <mutex>
 #include <string>
 
 namespace edgeai {
@@ -74,6 +75,9 @@ class PackManager {
     Json::Value default_device_capability_;
     HttpClient http_client_;
     mutable std::map<std::string, PackRuntime> runtimes_;
+    mutable std::mutex registry_mutex_;
+    mutable std::mutex rollback_mutex_;
+    mutable std::mutex runtimes_mutex_;
     PackEventSink* sink_ = nullptr;
 };
 

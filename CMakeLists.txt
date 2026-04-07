@@ -14,6 +14,14 @@ pkg_check_modules(GLIB REQUIRED gio-2.0 glib-2.0 gobject-2.0)
 pkg_check_modules(JSONCPP REQUIRED jsoncpp)
 pkg_check_modules(SQLITE3 REQUIRED sqlite3)
 pkg_check_modules(CURL REQUIRED libcurl)
+find_package(onnxruntime CONFIG QUIET
+    HINTS
+        /opt/homebrew/opt/onnxruntime/lib/cmake/onnxruntime
+        /usr/local/opt/onnxruntime/lib/cmake/onnxruntime
+)
+if(NOT onnxruntime_FOUND)
+    pkg_check_modules(ONNXRUNTIME REQUIRED IMPORTED_TARGET libonnxruntime)
+endif()
 
 set(EDGEAI_INCLUDE_DIR ${PROJECT_SOURCE_DIR}/include)
 set(EDGEAI_STATE_DIR ${PROJECT_SOURCE_DIR}/var/state)
@@ -77,10 +85,20 @@ target_link_libraries(edge_gatewayd PRIVATE edgeai_common)
 
 add_library(next_word_pack MODULE
     packs/next_word/src/next_word_pack.cpp
+    packs/next_word/src/next_word_engine.cpp
 )
 
-target_include_directories(next_word_pack PRIVATE ${EDGEAI_INCLUDE_DIR})
+target_include_directories(next_word_pack PRIVATE
+    ${EDGEAI_INCLUDE_DIR}
+    ${PROJECT_SOURCE_DIR}/packs/next_word/include
+)
 target_link_libraries(next_word_pack PRIVATE edgeai_common)
+if(TARGET onnxruntime::onnxruntime)
+    target_link_libraries(next_word_pack PRIVATE onnxruntime::onnxruntime)
+else()
+    target_include_directories(next_word_pack PRIVATE ${ONNXRUNTIME_INCLUDE_DIRS})
+    target_link_libraries(next_word_pack PRIVATE PkgConfig::ONNXRUNTIME)
+endif()
 set_target_properties(next_word_pack PROPERTIES
     PREFIX "lib"
     LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/packs/next_word/lib
@@ -94,18 +112,16 @@ add_custom_command(
     POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E rm -rf ${NEXT_WORD_BUNDLE_DIR}
     COMMAND ${CMAKE_COMMAND} -E make_directory ${NEXT_WORD_BUNDLE_DIR}/lib
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${NEXT_WORD_BUNDLE_DIR}/runtime
     COMMAND ${CMAKE_COMMAND} -E make_directory ${NEXT_WORD_BUNDLE_DIR}/model
     COMMAND ${CMAKE_COMMAND} -E make_directory ${NEXT_WORD_BUNDLE_DIR}/config
     COMMAND ${CMAKE_COMMAND} -E make_directory ${PROJECT_SOURCE_DIR}/artifacts
     COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:next_word_pack> ${NEXT_WORD_BUNDLE_DIR}/lib/
     COMMAND ${CMAKE_COMMAND} -E copy ${PROJECT_SOURCE_DIR}/packs/next_word/manifest.json ${NEXT_WORD_BUNDLE_DIR}/
-    COMMAND ${CMAKE_COMMAND} -E copy ${PROJECT_SOURCE_DIR}/packs/next_word/runtime/next_word_helper.py ${NEXT_WORD_BUNDLE_DIR}/runtime/
     COMMAND ${CMAKE_COMMAND} -E copy ${PROJECT_SOURCE_DIR}/packs/next_word/model/next_word_bigram.onnx ${NEXT_WORD_BUNDLE_DIR}/model/
     COMMAND ${CMAKE_COMMAND} -E copy ${PROJECT_SOURCE_DIR}/packs/next_word/model/vocab.json ${NEXT_WORD_BUNDLE_DIR}/model/
     COMMAND ${CMAKE_COMMAND} -E copy ${PROJECT_SOURCE_DIR}/packs/next_word/model/transitions.json ${NEXT_WORD_BUNDLE_DIR}/model/
     COMMAND ${CMAKE_COMMAND} -E copy ${PROJECT_SOURCE_DIR}/packs/next_word/config/default.json ${NEXT_WORD_BUNDLE_DIR}/config/
-    COMMAND ${CMAKE_COMMAND} -E chdir ${NEXT_WORD_BUNDLE_DIR} ${CMAKE_COMMAND} -E tar cfvz ${NEXT_WORD_ARTIFACT} --format=gnutar manifest.json lib runtime model config
+    COMMAND ${CMAKE_COMMAND} -E chdir ${NEXT_WORD_BUNDLE_DIR} ${CMAKE_COMMAND} -E tar cfvz ${NEXT_WORD_ARTIFACT} --format=gnutar manifest.json lib model config
 )
 
 add_custom_target(pack_artifacts ALL DEPENDS next_word_pack)
