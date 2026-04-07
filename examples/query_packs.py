@@ -21,9 +21,9 @@ def main() -> int:
         "--object-path",
         "/com/example/EdgeAI/Gateway",
         "--method",
-        "com.example.EdgeAI.Gateway1.QueryPacks",
+        "com.example.EdgeAI.Gateway1.HandleUserRequest",
         "user-1",
-        "next_word_prediction",
+        "predict next word",
         json.dumps(device),
     ]
     completed = subprocess.run(command, check=False, capture_output=True, text=True)

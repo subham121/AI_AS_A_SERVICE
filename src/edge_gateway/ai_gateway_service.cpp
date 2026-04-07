@@ -15,9 +15,15 @@ constexpr const char* kInterfaceName = "com.example.EdgeAI.Gateway1";
 const gchar* kIntrospectionXml = R"XML(
 <node>
   <interface name="com.example.EdgeAI.Gateway1">
+    <method name="HandleUserRequest">
+      <arg type="s" name="user_id" direction="in"/>
+      <arg type="s" name="skill" direction="in"/>
+      <arg type="s" name="device_capability_json" direction="in"/>
+      <arg type="s" name="response_json" direction="out"/>
+    </method>
     <method name="QueryPacks">
       <arg type="s" name="user_id" direction="in"/>
-      <arg type="s" name="intent" direction="in"/>
+      <arg type="s" name="capability" direction="in"/>
       <arg type="s" name="device_capability_json" direction="in"/>
       <arg type="s" name="response_json" direction="out"/>
     </method>
@@ -203,13 +209,24 @@ void AIGatewayService::handleMethodCall(GDBusConnection* /*connection*/,
 }
 
 Json::Value AIGatewayService::dispatch(const std::string& method, GVariant* parameters) {
+    if (method == "HandleUserRequest") {
+        const gchar* user_id = nullptr;
+        const gchar* skill = nullptr;
+        const gchar* device_json = nullptr;
+        g_variant_get(parameters, "(&s&s&s)", &user_id, &skill, &device_json);
+        std::cerr << "[dispatch::HandleUserRequest] user_id=" << (user_id ? user_id : "(null)")
+                  << " skill=" << (skill ? skill : "(null)") << std::endl;
+        Json::Value response = manager_.handleUserRequest(user_id, skill, parseJson(device_json));
+        response["user_id"] = user_id;
+        return response;
+    }
     if (method == "QueryPacks") {
         const gchar* user_id = nullptr;
-        const gchar* intent = nullptr;
+        const gchar* capability = nullptr;
         const gchar* device_json = nullptr;
-        g_variant_get(parameters, "(&s&s&s)", &user_id, &intent, &device_json);
-        std::cerr << "[dispatch::QueryPacks] user_id=" << (user_id ? user_id : "(null)") << " intent=" << (intent ? intent : "(null)") << std::endl;
-        Json::Value response = manager_.queryPacks(intent, parseJson(device_json));
+        g_variant_get(parameters, "(&s&s&s)", &user_id, &capability, &device_json);
+        std::cerr << "[dispatch::QueryPacks] user_id=" << (user_id ? user_id : "(null)") << " capability=" << (capability ? capability : "(null)") << std::endl;
+        Json::Value response = manager_.queryPacks(capability, parseJson(device_json));
         response["user_id"] = user_id;
         return response;
     }

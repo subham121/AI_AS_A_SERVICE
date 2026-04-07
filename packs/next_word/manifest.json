@@ -19,7 +19,8 @@
     "task": "next_word_prediction",
     "languages": ["en"],
     "max_context_tokens": 1,
-    "model_format": "onnx"
+    "model_format": "onnx",
+    "keywords": ["next word", "word prediction", "autocomplete"]
   },
   "dependencies": [],
   "services": ["activate", "configure", "predict", "deactivate"],

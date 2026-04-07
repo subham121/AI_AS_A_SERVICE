@@ -29,7 +29,8 @@ class PackManager {
     void setEventSink(PackEventSink* sink) { sink_ = sink; }
 
     Json::Value initialize();
-    Json::Value queryPacks(const std::string& intent, const Json::Value& device_capability);
+    Json::Value handleUserRequest(const std::string& user_id, const std::string& skill, const Json::Value& device_capability);
+    Json::Value queryPacks(const std::string& capability, const Json::Value& device_capability);
     Json::Value installPack(const std::string& user_id, const std::string& pack_id, bool approve_dependencies);
     Json::Value enablePack(const std::string& user_id, const std::string& pack_id);
     Json::Value loadPack(const std::string& user_id, const std::string& pack_id);
@@ -44,11 +45,19 @@ class PackManager {
     void storeRegistry(const Json::Value& registry) const;
     Json::Value loadRollbackRegistry() const;
     void storeRollbackRegistry(const Json::Value& registry) const;
+    Json::Value fetchCapabilityList() const;
+    std::string identifyCapability(const std::string& skill, const Json::Value& capability_list) const;
     Json::Value fetchPackMetadata(const std::string& pack_id) const;
+    Json::Value findLocalPackForCapability(const Json::Value& registry,
+                                           const std::string& capability,
+                                           const Json::Value& device_capability) const;
     PackManifest loadInstalledManifest(const Json::Value& pack_entry) const;
     std::filesystem::path manifestPathFor(const Json::Value& pack_entry) const;
     std::filesystem::path packRootFor(const Json::Value& pack_entry) const;
     Json::Value deviceCapabilityFor(const Json::Value& override_capability) const;
+    std::string userPackState(const Json::Value& registry, const std::string& user_id, const std::string& pack_id) const;
+    bool isPackInstalled(const Json::Value& pack_entry) const;
+    bool packSupportsCapability(const Json::Value& pack_entry, const std::string& capability) const;
     bool capabilityMatches(const Json::Value& required, const Json::Value& actual) const;
     void publishEvent(const std::string& phase,
                       const std::string& status,

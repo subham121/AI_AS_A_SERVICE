@@ -55,6 +55,18 @@ PackRuntime& PackRuntime::operator=(PackRuntime&& other) noexcept {
     return *this;
 }
 
+int PackRuntime::readAbiVersion(const std::filesystem::path& pack_root, const PackManifest& manifest) {
+    const auto library_path = manifest.libraryPath(pack_root);
+    void* handle = dlopen(library_path.string().c_str(), RTLD_NOW);
+    if (!handle) {
+        throw std::runtime_error(std::string("Failed to load pack library for ABI validation: ") + dlerror());
+    }
+    const auto get_abi = resolveSymbol<GetAbiFn>(handle, "edgeai_pack_get_abi_version");
+    const int abi_version = get_abi();
+    dlclose(handle);
+    return abi_version;
+}
+
 void PackRuntime::load(const std::filesystem::path& pack_root, const PackManifest& manifest, const std::filesystem::path& state_dir) {
     std::cerr << "[PackRuntime::load] Starting pack load from " << pack_root << std::endl;
     unload();

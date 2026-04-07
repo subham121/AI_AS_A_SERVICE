@@ -142,6 +142,49 @@ def row_to_pack(row: sqlite3.Row) -> dict[str, Any]:
     }
 
 
+def collect_capability_aliases(pack: dict[str, Any]) -> list[str]:
+    aliases = {pack["intent"]}
+    for tag in pack.get("tags", []):
+        aliases.add(tag)
+    ai_capability = pack.get("ai_capability", {})
+    if isinstance(ai_capability, dict):
+        task = ai_capability.get("task")
+        if isinstance(task, str):
+            aliases.add(task)
+        for keyword in ai_capability.get("keywords", []):
+            if isinstance(keyword, str):
+                aliases.add(keyword)
+    return sorted(aliases)
+
+
+def normalize_text(text: str) -> str:
+    return "".join(ch.lower() if ch.isalnum() else " " for ch in text).strip()
+
+
+def identify_capability_from_skill(skill: str, capability_list: list[str]) -> str | None:
+    normalized_skill = normalize_text(skill)
+    if not normalized_skill:
+        return None
+    skill_terms = set(normalized_skill.split())
+    ranked: list[tuple[int, int, str]] = []
+    for capability in capability_list:
+        normalized_capability = normalize_text(capability)
+        capability_terms = set(normalized_capability.split())
+        score = 0
+        if normalized_capability == normalized_skill:
+            score += 100
+        if normalized_capability in normalized_skill:
+            score += 20
+        if skill_terms & capability_terms:
+            score += len(skill_terms & capability_terms) * 5
+        if score > 0:
+            ranked.append((score, len(normalized_capability), capability))
+    if not ranked:
+        return None
+    ranked.sort(key=lambda item: (-item[0], item[1], item[2]))
+    return ranked[0][2]
+
+
 def capability_matches(required: dict[str, Any], actual: dict[str, Any]) -> bool:
     architecture = required.get("architecture")
     if isinstance(architecture, list) and actual.get("architecture") not in architecture:
@@ -166,6 +209,36 @@ def healthz():
     return jsonify({"status": "ok"})
 
 
+@app.get("/capabilities")
+def get_capabilities():
+    conn = connect_db()
+    rows = conn.execute("SELECT * FROM packs").fetchall()
+    conn.close()
+    capabilities: set[str] = set()
+    for row in rows:
+        capabilities.update(collect_capability_aliases(row_to_pack(row)))
+    return jsonify({"capabilities": sorted(capabilities), "count": len(capabilities)})
+
+
+@app.post("/capabilities/identify")
+def identify_capability():
+    payload = request.get_json(force=True)
+    skill = payload.get("skill", "")
+    capability_list = payload.get("capability_list")
+    if not isinstance(capability_list, list):
+        conn = connect_db()
+        rows = conn.execute("SELECT * FROM packs").fetchall()
+        conn.close()
+        capability_set: set[str] = set()
+        for row in rows:
+            capability_set.update(collect_capability_aliases(row_to_pack(row)))
+        capability_list = sorted(capability_set)
+    capability = identify_capability_from_skill(skill, capability_list)
+    if capability is None:
+        return jsonify({"status": "error", "message": "capability not identified"}), 404
+    return jsonify({"status": "ok", "capability": capability})
+
+
 @app.post("/packs/reindex")
 def reindex_endpoint():
     return jsonify(reindex())
@@ -184,15 +257,17 @@ def get_pack(pack_id: str):
 @app.post("/packs/query")
 def query_packs():
     payload = request.get_json(force=True)
-    intent = payload["intent"]
+    capability = payload.get("capability") or payload.get("intent")
     device = payload["device_capability"]
     conn = connect_db()
-    rows = conn.execute("SELECT * FROM packs WHERE intent = ?", (intent,)).fetchall()
+    rows = conn.execute("SELECT * FROM packs").fetchall()
     conn.close()
 
     compatible = []
     for row in rows:
         pack = row_to_pack(row)
+        if capability and capability not in collect_capability_aliases(pack):
+            continue
         if capability_matches(pack["device_capability"], device):
             compatible.append(pack)
     return jsonify({"packs": compatible, "count": len(compatible)})

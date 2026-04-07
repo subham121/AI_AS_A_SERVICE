@@ -28,7 +28,8 @@ The AI Gateway is exposed over DBus at:
 
 Supported methods:
 
-- `QueryPacks(userId, intent, deviceCapabilityJson)`
+- `HandleUserRequest(userId, skill, deviceCapabilityJson)`
+- `QueryPacks(userId, capability, deviceCapabilityJson)`
 - `InstallPack(userId, packId, approveDependencies)`
 - `EnablePack(userId, packId)`
 - `LoadPack(userId, packId)`
@@ -44,15 +45,14 @@ The service also emits a `PackStateChanged` signal with a JSON payload when the 
 
 The sample PackManager implements the lifecycle expressed in your PlantUML:
 
-1. Query pack metadata from the catalog service.
-2. Download the selected pack into staging.
-3. Verify the downloaded artifact by MD5.
-4. Validate device capability and AI capability constraints.
-5. Resolve dependencies with explicit approval.
-6. Install through an `opkg`-shaped adapter.
-7. Register state in the intent and pack registry.
-8. Load the plugin and validate ABI compatibility.
-9. Activate, configure, invoke, unload, disable, uninstall, or roll back as required.
+1. Refresh the capability list from the catalog service.
+2. Identify the requested capability from the external app skill text.
+3. Check for a compatible local pack before querying cloud packs.
+4. Download the selected pack into staging and verify it by MD5.
+5. Resolve dependencies and install the bundle through an `opkg`-shaped adapter.
+6. Register state in the pack registry.
+7. Enable, load, invoke, unload, disable, and uninstall packs according to registry state.
+8. Validate ABI compatibility before activation.
 
 State is persisted in:
 
@@ -77,6 +77,8 @@ The catalog service keeps an SQLite index of:
 It exposes:
 
 - `GET /healthz`
+- `GET /capabilities`
+- `POST /capabilities/identify`
 - `GET /packs/<pack_id>`
 - `POST /packs/query`
 - `POST /packs/reindex`
@@ -122,8 +124,8 @@ If `gdbus` is available:
 gdbus call --session \
   --dest com.example.EdgeAI \
   --object-path /com/example/EdgeAI/Gateway \
-  --method com.example.EdgeAI.Gateway1.QueryPacks \
-  "user-1" "next_word_prediction" '{"architecture":"arm64","ram_mb":2048,"os_family":"linux","accelerators":[]}'
+  --method com.example.EdgeAI.Gateway1.HandleUserRequest \
+  "user-1" "predict next word" '{"architecture":"arm64","ram_mb":2048,"os_family":"linux","accelerators":[]}'
 ```
 
 ## Sample Pack

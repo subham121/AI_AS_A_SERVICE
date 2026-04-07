@@ -19,6 +19,7 @@ class PackRuntime {
     PackRuntime(PackRuntime&&) noexcept;
     PackRuntime& operator=(PackRuntime&&) noexcept;
 
+    static int readAbiVersion(const std::filesystem::path& pack_root, const PackManifest& manifest);
     void load(const std::filesystem::path& pack_root, const PackManifest& manifest, const std::filesystem::path& state_dir);
     void configure(const std::string& config_json);
     Json::Value predict(const std::string& prompt, const std::string& options_json);
