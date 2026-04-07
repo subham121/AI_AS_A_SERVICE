@@ -1,0 +1,12 @@
+{
+  "hello": "world",
+  "world": "edge",
+  "edge": "ai",
+  "ai": "service",
+  "service": "pack",
+  "pack": "manager",
+  "manager": "dbus",
+  "dbus": "plugin",
+  "plugin": "model",
+  "model": "hello"
+}

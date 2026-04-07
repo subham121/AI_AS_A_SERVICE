@@ -1,0 +1,275 @@
+@startuml
+title PackManager Lifecycle Sequence
+autonumber
+hide footbox
+skinparam sequenceMessageAlign center
+skinparam responseMessageBelowArrow true
+skinparam ParticipantPadding 20
+skinparam BoxPadding 10
+actor User
+participant "AI Gateway" as Gateway
+participant "PackManager" as PM
+participant "IntentIdentifier\n(llm on Edge/Cloud)" as Intent
+participant "CapabilityChecker" as Capability
+database "IntentAndPackRegistry" as Registry
+database "PackStaging" as Staging
+database "RollbackRegistry" as RollRegistry
+participant "PackServer\n(Cloud)" as PackCloud
+participant "OPKG" as OPKG
+participant "PackPlugin" as Plugin
+participant "AI Pack" as AIPack
+participant "MeteringService" as Metering
+== Discovery And Selection Phase ==
+User -> Gateway: userQuery(query)
+Gateway -> PM: initialize()
+PM --> Gateway: initialized
+Gateway -> Intent: identifyIntent(query)
+Intent --> Gateway: intent
+Gateway -> Capability: checkCapability(intent)
+Capability -> Registry: getSupportedIntent()
+Registry --> Capability: supportedIntentList
+Capability --> Gateway: capable / not capable
+alt Not capable
+ Gateway --> User: unableToServe()
+else Capable
+ Gateway -> PM: collectPackList(intent)
+ PM -> PM: getDeviceCapability()
+ PM -> Registry: getCompatibleLocalPacks(intent, deviceCapability)
+ Registry --> PM: local compatible packs
+ PM -> PackCloud: getCompatibleCloudPacks(intent, deviceCapability)
+ PackCloud --> PM: cloud compatible packs
+ PM -> PM: mergeCompatiblePacks()
+ PM --> Gateway: compatible packs list\n(pack_ids, installed + not installed)
+ Gateway --> User: showPackListAndRequestSelection()
+ User -> Gateway: usePack(pack_id)
+ Gateway -> Registry: checkPackRegistration(pack_id)
+ Registry --> Gateway: registration status + pack details
+ == Installation Phase ==
+ alt Installation required
+   Gateway -> PM: installPack(pack_id)
+   PM -> PackCloud: getPackDetails(pack_id)
+   PackCloud --> PM: json(URL + pack metadata(md5sum, capability, dependencies, etc.)
+
+   PM -> PackCloud: downloadPack(pack_url)
+   PackCloud --> PM: package content
+   PM -> Staging: stageDownloadedPack(pack_id)
+   Staging --> PM: staged package reference
+   PM -> PM: verifyMD5(staged package, md5sum)
+   alt MD5 verified
+     PM -> Capability: checkCapability(pack capabilities, deviceCapability)
+     Capability --> PM: compatible / incompatible
+     alt Capability compatible
+       opt Previous version exists
+         PM -> Registry: getInstalledVersion(pack_id)
+         Registry --> PM: current version
+         PM -> RollRegistry: registerPreviousVersion(pack_id, current version)
+         RollRegistry --> PM: rollback entry created
+       end
+       opt Dependencies required
+         PM --> Gateway: requestDependencyInstallPermission()
+         Gateway --> User: approveDependencyInstall()
+         User -> Gateway: permissionGranted
+         Gateway -> PM: permissionGranted
+         loop For each dependency
+           PM -> PM: resolveDependency(dependency_id)
+           PM -> OPKG: install(dependency_id)
+           OPKG --> PM: dependency installed
+         end
+       end
+       PM -> OPKG: installFromStage(pack_id, version)
+       OPKG --> PM: pack installed
+       PM -> Registry: registerPack(pack_id, version)\nand set status Installed
+       Registry --> PM: OK
+       PM --> Gateway: publish(pack_installed, pack_id, version)
+     else Capability incompatible
+       PM -> Staging: discardStagedPack(pack_id)
+       Staging --> PM: staged package removed
+       PM -> Registry: updateStatus(pack_id, Blocked)
+       Registry --> PM: OK
+       PM --> Gateway: publish(pack_blocked_incompatible_capability, pack_id)
+       Gateway --> User: pack cannot be installed on this device
+     end
+   else MD5 verification failed
+     PM -> Staging: discardStagedPack(pack_id)
+     Staging --> PM: staged package removed
+     PM -> Registry: updateStatus(pack_id, InstallFailed)
+     Registry --> PM: OK
+     PM --> Gateway: publish(pack_download_verification_failed, pack_id)
+     Gateway --> User: installation failed due to checksum mismatch
+   end
+ else Pack already installed locally
+   note over Gateway,Registry
+     Pack is already known to the registry,
+     so installation is skipped.
+   end note
+ end
+ == Enable Phase ==
+ Gateway -> PM: enablePack(user_id, pack_id)
+ PM -> Registry: checkPackState(pack_id)
+ Registry --> PM: Installed / Disabled / Blocked
+ PM -> Registry: updateStatus(user_id, pack_id, Enabled)
+ Registry --> PM: OK
+ PM --> Gateway: publish(pack_enabled, user_id, pack_id)
+ == Loading Phase ==
+ Gateway -> PM: loadPack(user_id, pack_id)
+ PM -> Registry: getPack(pack_id)
+ Registry --> PM: pack metadata + pack_abi_version
+ PM -> Plugin: validateABI(pack_id, pack_abi_version)
+ Plugin -> AIPack: getABIInfo()
+ AIPack --> Plugin: pack_abi_version / exported ABI
+ Plugin --> PM: ABI compatible / incompatible
+ alt ABI compatible
+   PM -> Plugin: initializePack(pack_id)
+   Plugin -> AIPack: initialize()
+   AIPack --> Plugin: status OK / activation failed
+   alt Activation successful
+     Plugin --> PM: initialized
+     PM -> Registry: updateStatus(user_id, pack_id, Loaded)
+     Registry --> PM: OK
+     PM --> Gateway: publish(pack_loaded, user_id, pack_id)
+     Gateway -> Metering: initiateMetering(user_id)
+     Metering --> Gateway: metering started
+   else Activation failed
+     Plugin --> PM: activation failed
+     PM -> RollRegistry: getPreviousVersion(pack_id)
+     RollRegistry --> PM: previous version / none
+     alt Previous version available
+       PM -> OPKG: rollbackTo(pack_id, previous version)
+       OPKG --> PM: previous version restored
+       PM -> Registry: registerPack(pack_id, previous version)\nand set status RolledBack
+       Registry --> PM: OK
+       PM --> Gateway: publish(pack_rolled_back_on_activation_failure, pack_id)
+       Gateway --> User: previous pack version restored
+     else No rollback entry
+       PM -> Registry: updateStatus(user_id, pack_id, Blocked)
+       Registry --> PM: OK
+       PM --> Gateway: publish(pack_activation_failed, user_id, pack_id)
+       Gateway --> User: pack activation failed
+     end
+   end
+ else ABI incompatible
+   PM -> Registry: updateStatus(user_id, pack_id, Blocked)
+   Registry --> PM: OK
+   PM --> Gateway: publish(pack_blocked_incompatible_abi, user_id, pack_id)
+   Gateway --> User: pack cannot be loaded on this runtime
+ end
+ == Usage Phase ==
+ Gateway -> Metering: tokenEstimation(user_id)
+ Metering --> Gateway: tokens available? yes / no
+ alt Tokens not available
+   Gateway --> User: denyServiceAccess()
+ else Tokens available
+   Gateway -> PM: getService<T>(user_id, pack_id)
+   PM -> Registry: checkLoaded(user_id, pack_id)
+   Registry --> PM: Loaded / Not loaded
+   alt Pack not loaded
+     note over PM,Plugin
+       "Loading Phase" should be initiated.
+     end note
+   else Pack already loaded
+     note over PM,Registry
+       Existing loaded instance is reused.
+     end note
+   end
+   PM -> Plugin: get(user_id, pack_id)
+   Plugin --> PM: PackHandle<T>
+   PM --> Gateway: PackHandle<T>
+   Gateway -> AIPack: service.method(userQuery)
+   AIPack --> Gateway: result, tokens spent
+   Gateway -> Metering: drawTokens(user_id, tokens spent)
+   Metering --> Gateway: remaining tokens / exhausted
+   Gateway --> User: result / inference
+   opt HITL required
+     User -> Gateway: humanInTheLoopFeedback()
+     Gateway --> User: feedbackAcknowledged()
+   end
+   opt User requests rollback to previous version
+     User -> Gateway: requestRollback(pack_id)
+     Gateway -> PM: rollbackPack(pack_id)
+     PM -> RollRegistry: getPreviousVersion(pack_id)
+     RollRegistry --> PM: previous version / none
+     alt Previous version available
+       PM -> OPKG: rollbackTo(pack_id, previous version)
+       OPKG --> PM: previous version restored
+       PM -> Registry: registerPack(pack_id, previous version)\nand set status RolledBack
+       Registry --> PM: OK
+       PM --> Gateway: publish(pack_rolled_back_by_user, pack_id)
+       Gateway --> User: rollbackSuccess()
+       note over PM,Plugin
+         "Loading Phase" should be re-initiated for restored version.
+       end note
+     else No rollback entry
+       PM -> Registry: updateStatus(pack_id, RollbackUnavailable)
+       Registry --> PM: OK
+       PM --> Gateway: publish(pack_rollback_unavailable, pack_id)
+       Gateway --> User: rollbackUnavailable()
+     end
+   end
+ end
+ == Unload Phase ==
+ Gateway -> PM: unloadPack(user_id, pack_id)
+ PM -> Plugin: deactivatePack(pack_id)
+ Plugin -> AIPack: deactivate()
+ AIPack --> Plugin: deactivated
+ Plugin -> AIPack: plugOut(pack_id)
+ AIPack --> Plugin: status OK
+ Plugin --> PM: unloaded
+ PM -> Registry: updateStatus(user_id, pack_id, Unloaded)
+ Registry --> PM: OK
+ PM --> Gateway: publish(pack_unloaded, user_id, pack_id)
+ Gateway -> Metering: pauseMetering(user_id)
+ Metering --> Gateway: metering paused
+ == Disable Phase ==
+ Gateway -> PM: disablePack(user_id, pack_id)
+ PM -> Registry: checkPackState(user_id, pack_id)
+ Registry --> PM: Enabled / Not enabled
+ opt Pack currently loaded
+   note over PM,Plugin
+     If pack is loaded, initiate "Unload Phase" first.
+   end note
+ end
+ PM -> Registry: updateStatus(user_id, pack_id, Disabled)
+ Registry --> PM: OK
+ PM --> Gateway: publish(pack_disabled, user_id, pack_id)
+ == Uninstallation Phase ==
+ Gateway -> PM: uninstallPack(pack_id)
+ PM -> Registry: checkPackState(pack_id)
+ Registry --> PM: Installed / Already uninstalled
+ alt Already uninstalled
+   PM --> Gateway: packAlreadyUninstalled()
+   Gateway --> User: uninstallSkipped()
+ else Installed
+   PM -> Registry: checkOtherUsers(pack_id)
+   Registry --> PM: usage details
+   opt Other users or apps still use this pack
+     PM --> Gateway: requestUninstallPermission()
+     Gateway --> User: approveForcedUninstall()
+     User -> Gateway: approvalGranted
+     Gateway -> PM: approvalGranted
+   end
+   opt Pack currently loaded
+     note over PM,Plugin
+       If pack is loaded, initiate "Unload Phase" before uninstall.
+     end note
+   end
+   PM -> Registry: findDependencies(pack_id)
+   Registry --> PM: dependency list
+   loop For each dependency
+     PM -> OPKG: uninstall(dependency_id)
+     OPKG --> PM: dependency removed
+     PM -> Registry: unregisterPack(dependency_id)
+     Registry --> PM: OK
+   end
+   PM -> OPKG: uninstall(pack_id)
+   OPKG --> PM: pack removed
+   PM -> Staging: purgeStagedPack(pack_id)
+   Staging --> PM: staged package removed
+   PM -> RollRegistry: removeRollbackHistory(pack_id)
+   RollRegistry --> PM: rollback history removed
+   PM -> Registry: unregisterPack(pack_id)\nand set status Uninstalled
+   Registry --> PM: OK
+   PM --> Gateway: publish(pack_uninstalled, pack_id)
+   Gateway --> User: uninstallSuccess()
+ end
+end
+@enduml

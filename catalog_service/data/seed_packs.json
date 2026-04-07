@@ -1,0 +1,27 @@
+[
+  {
+    "pack_id": "next_word_pack",
+    "name": "Next Word Predictor",
+    "version": "1.0.0",
+    "package_relpath": "artifacts/next_word_pack.tar.gz",
+    "manifest_relpath": "packs/next_word/manifest.json",
+    "license": "MIT",
+    "intent": "next_word_prediction",
+    "metering_unit": "prediction",
+    "dependencies": [],
+    "device_capability": {
+      "architecture": ["arm64", "x86_64"],
+      "min_ram_mb": 128,
+      "os_family": ["linux", "darwin"],
+      "accelerators": []
+    },
+    "ai_capability": {
+      "task": "next_word_prediction",
+      "languages": ["en"],
+      "max_context_tokens": 1,
+      "model_format": "onnx"
+    },
+    "services": ["activate", "configure", "predict", "deactivate"],
+    "tags": ["next-word", "autocomplete", "onnx", "toy", "plugin"]
+  }
+]

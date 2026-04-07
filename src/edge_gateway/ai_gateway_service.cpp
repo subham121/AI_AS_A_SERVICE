@@ -1,0 +1,253 @@
+#include <edgeai/ai_gateway_service.h>
+#include <edgeai/json_utils.h>
+
+#include <iostream>
+#include <stdexcept>
+
+namespace edgeai {
+
+namespace {
+
+constexpr const char* kBusName = "com.example.EdgeAI";
+constexpr const char* kObjectPath = "/com/example/EdgeAI/Gateway";
+constexpr const char* kInterfaceName = "com.example.EdgeAI.Gateway1";
+
+const gchar* kIntrospectionXml = R"XML(
+<node>
+  <interface name="com.example.EdgeAI.Gateway1">
+    <method name="QueryPacks">
+      <arg type="s" name="user_id" direction="in"/>
+      <arg type="s" name="intent" direction="in"/>
+      <arg type="s" name="device_capability_json" direction="in"/>
+      <arg type="s" name="response_json" direction="out"/>
+    </method>
+    <method name="InstallPack">
+      <arg type="s" name="user_id" direction="in"/>
+      <arg type="s" name="pack_id" direction="in"/>
+      <arg type="b" name="approve_dependencies" direction="in"/>
+      <arg type="s" name="response_json" direction="out"/>
+    </method>
+    <method name="EnablePack">
+      <arg type="s" name="user_id" direction="in"/>
+      <arg type="s" name="pack_id" direction="in"/>
+      <arg type="s" name="response_json" direction="out"/>
+    </method>
+    <method name="LoadPack">
+      <arg type="s" name="user_id" direction="in"/>
+      <arg type="s" name="pack_id" direction="in"/>
+      <arg type="s" name="response_json" direction="out"/>
+    </method>
+    <method name="Invoke">
+      <arg type="s" name="user_id" direction="in"/>
+      <arg type="s" name="pack_id" direction="in"/>
+      <arg type="s" name="prompt" direction="in"/>
+      <arg type="s" name="options_json" direction="in"/>
+      <arg type="s" name="response_json" direction="out"/>
+    </method>
+    <method name="UnloadPack">
+      <arg type="s" name="user_id" direction="in"/>
+      <arg type="s" name="pack_id" direction="in"/>
+      <arg type="s" name="response_json" direction="out"/>
+    </method>
+    <method name="DisablePack">
+      <arg type="s" name="user_id" direction="in"/>
+      <arg type="s" name="pack_id" direction="in"/>
+      <arg type="s" name="response_json" direction="out"/>
+    </method>
+    <method name="UninstallPack">
+      <arg type="s" name="user_id" direction="in"/>
+      <arg type="s" name="pack_id" direction="in"/>
+      <arg type="b" name="force_shared_users" direction="in"/>
+      <arg type="s" name="response_json" direction="out"/>
+    </method>
+    <method name="RollbackPack">
+      <arg type="s" name="user_id" direction="in"/>
+      <arg type="s" name="pack_id" direction="in"/>
+      <arg type="s" name="response_json" direction="out"/>
+    </method>
+    <signal name="PackStateChanged">
+      <arg type="s" name="event_json"/>
+    </signal>
+  </interface>
+</node>
+)XML";
+
+const GDBusInterfaceVTable kInterfaceVTable = {
+    &AIGatewayService::handleMethodCall,
+    nullptr,
+    nullptr,
+    {0}
+};
+
+}  // namespace
+
+AIGatewayService::AIGatewayService(PackManager& manager) : manager_(manager) {
+    manager_.setEventSink(this);
+    GError* error = nullptr;
+    introspection_data_ = g_dbus_node_info_new_for_xml(kIntrospectionXml, &error);
+    if (!introspection_data_) {
+        std::string message = error ? error->message : "Unknown DBus introspection error";
+        if (error) {
+            g_error_free(error);
+        }
+        throw std::runtime_error(message);
+    }
+}
+
+AIGatewayService::~AIGatewayService() {
+    if (registration_id_ != 0 && connection_) {
+        g_dbus_connection_unregister_object(connection_, registration_id_);
+    }
+    if (owner_id_ != 0) {
+        g_bus_unown_name(owner_id_);
+    }
+    if (loop_) {
+        g_main_loop_unref(loop_);
+    }
+    if (introspection_data_) {
+        g_dbus_node_info_unref(introspection_data_);
+    }
+}
+
+void AIGatewayService::publish(const Json::Value& event) {
+    if (!connection_) {
+        return;
+    }
+    const auto payload = toJsonString(event);
+    g_dbus_connection_emit_signal(connection_,
+                                  nullptr,
+                                  kObjectPath,
+                                  kInterfaceName,
+                                  "PackStateChanged",
+                                  g_variant_new("(s)", payload.c_str()),
+                                  nullptr);
+}
+
+void AIGatewayService::run() {
+    loop_ = g_main_loop_new(nullptr, FALSE);
+    owner_id_ = g_bus_own_name(G_BUS_TYPE_SESSION,
+                               kBusName,
+                               G_BUS_NAME_OWNER_FLAGS_NONE,
+                               &AIGatewayService::onBusAcquired,
+                               &AIGatewayService::onNameAcquired,
+                               &AIGatewayService::onNameLost,
+                               this,
+                               nullptr);
+    g_main_loop_run(loop_);
+}
+
+void AIGatewayService::onBusAcquired(GDBusConnection* connection, const gchar* /*name*/, gpointer user_data) {
+    auto* self = static_cast<AIGatewayService*>(user_data);
+    self->connection_ = connection;
+    GError* error = nullptr;
+    self->registration_id_ = g_dbus_connection_register_object(connection,
+                                                               kObjectPath,
+                                                               self->introspection_data_->interfaces[0],
+                                                               &kInterfaceVTable,
+                                                               self,
+                                                               nullptr,
+                                                               &error);
+    if (self->registration_id_ == 0) {
+        std::cerr << "Failed to register DBus object: " << (error ? error->message : "unknown") << '\n';
+        if (error) {
+            g_error_free(error);
+        }
+    }
+}
+
+void AIGatewayService::onNameAcquired(GDBusConnection* /*connection*/, const gchar* name, gpointer /*user_data*/) {
+    std::cout << "AI Gateway DBus service acquired name: " << name << '\n';
+}
+
+void AIGatewayService::onNameLost(GDBusConnection* /*connection*/, const gchar* name, gpointer user_data) {
+    std::cerr << "AI Gateway DBus service lost name: " << (name ? name : "(null)") << '\n';
+    auto* self = static_cast<AIGatewayService*>(user_data);
+    if (self->loop_) {
+        g_main_loop_quit(self->loop_);
+    }
+}
+
+void AIGatewayService::handleMethodCall(GDBusConnection* /*connection*/,
+                                        const gchar* /*sender*/,
+                                        const gchar* /*object_path*/,
+                                        const gchar* /*interface_name*/,
+                                        const gchar* method_name,
+                                        GVariant* parameters,
+                                        GDBusMethodInvocation* invocation,
+                                        gpointer user_data) {
+    auto* self = static_cast<AIGatewayService*>(user_data);
+    try {
+        Json::Value response = self->dispatch(method_name, parameters);
+        g_dbus_method_invocation_return_value(invocation, g_variant_new("(s)", toJsonString(response).c_str()));
+    } catch (const std::exception& ex) {
+        Json::Value error = makeStatus("error", ex.what());
+        g_dbus_method_invocation_return_value(invocation, g_variant_new("(s)", toJsonString(error).c_str()));
+    }
+}
+
+Json::Value AIGatewayService::dispatch(const std::string& method, GVariant* parameters) {
+    if (method == "QueryPacks") {
+        const gchar* user_id = nullptr;
+        const gchar* intent = nullptr;
+        const gchar* device_json = nullptr;
+        g_variant_get(parameters, "(&s&s&s)", &user_id, &intent, &device_json);
+        Json::Value response = manager_.queryPacks(intent, parseJson(device_json));
+        response["user_id"] = user_id;
+        return response;
+    }
+    if (method == "InstallPack") {
+        const gchar* user_id = nullptr;
+        const gchar* pack_id = nullptr;
+        gboolean approve = FALSE;
+        g_variant_get(parameters, "(&s&sb)", &user_id, &pack_id, &approve);
+        return manager_.installPack(user_id, pack_id, approve);
+    }
+    if (method == "EnablePack") {
+        const gchar* user_id = nullptr;
+        const gchar* pack_id = nullptr;
+        g_variant_get(parameters, "(&s&s)", &user_id, &pack_id);
+        return manager_.enablePack(user_id, pack_id);
+    }
+    if (method == "LoadPack") {
+        const gchar* user_id = nullptr;
+        const gchar* pack_id = nullptr;
+        g_variant_get(parameters, "(&s&s)", &user_id, &pack_id);
+        return manager_.loadPack(user_id, pack_id);
+    }
+    if (method == "Invoke") {
+        const gchar* user_id = nullptr;
+        const gchar* pack_id = nullptr;
+        const gchar* prompt = nullptr;
+        const gchar* options_json = nullptr;
+        g_variant_get(parameters, "(&s&s&s&s)", &user_id, &pack_id, &prompt, &options_json);
+        return manager_.invoke(user_id, pack_id, prompt, options_json);
+    }
+    if (method == "UnloadPack") {
+        const gchar* user_id = nullptr;
+        const gchar* pack_id = nullptr;
+        g_variant_get(parameters, "(&s&s)", &user_id, &pack_id);
+        return manager_.unloadPack(user_id, pack_id);
+    }
+    if (method == "DisablePack") {
+        const gchar* user_id = nullptr;
+        const gchar* pack_id = nullptr;
+        g_variant_get(parameters, "(&s&s)", &user_id, &pack_id);
+        return manager_.disablePack(user_id, pack_id);
+    }
+    if (method == "UninstallPack") {
+        const gchar* user_id = nullptr;
+        const gchar* pack_id = nullptr;
+        gboolean force_shared = FALSE;
+        g_variant_get(parameters, "(&s&sb)", &user_id, &pack_id, &force_shared);
+        return manager_.uninstallPack(user_id, pack_id, force_shared);
+    }
+    if (method == "RollbackPack") {
+        const gchar* user_id = nullptr;
+        const gchar* pack_id = nullptr;
+        g_variant_get(parameters, "(&s&s)", &user_id, &pack_id);
+        return manager_.rollbackPack(user_id, pack_id);
+    }
+    throw std::runtime_error("Unsupported method: " + method);
+}
+
+}  // namespace edgeai

@@ -1,0 +1,11 @@
+.venv/
+build/
+artifacts/
+var/state/
+var/staging/
+var/installed/
+catalog_service/data/packs.db
+__pycache__/
+*.pyc
+.DS_Store
+packmanager_lifecycle_sequence.jpeg
