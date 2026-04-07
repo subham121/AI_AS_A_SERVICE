@@ -125,6 +125,7 @@ else Capable
   end
  end
  == Usage Phase ==
+ User -> Gateway: serviceRequest(user_id, pack_id, input)
   Gateway -> PM: getService<T>(user_id, pack_id)
   PM -> Registry: checkPackState(pack_id)
   Registry --> PM: Loaded / Not loaded
@@ -140,9 +141,9 @@ else Capable
   PM -> Plugin: get(user_id, pack_id)
   Plugin --> PM: PackHandle<T>
   PM --> Gateway: PackHandle<T>
-  Gateway -> AIPack: service.method(userQuery)
-  AIPack --> Gateway: result
-  Gateway --> User: result / inference
+  Gateway -> AIPack: service.method("getInference", input)
+  AIPack --> Gateway: response / inference
+  Gateway --> User: response
  == Unload Phase ==
  Gateway -> PM: unloadPack(user_id, pack_id)
 PM -> Registry: checkPackState(pack_id)
