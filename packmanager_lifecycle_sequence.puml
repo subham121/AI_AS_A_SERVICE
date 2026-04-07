@@ -14,7 +14,7 @@ database "PackStaging" as Staging
 database "RollbackRegistry" as RollRegistry
 participant "CapabilitytIdentifier\n(Cloud)" as Capability
 participant "PackServer\n(Cloud)" as PackCloud
-participant "PackPlugin" as Plugin
+participant "PackRuntime" as Plugin
 participant "AI Pack" as AIPack
 participant "AI Capability Provider" as cap_provider
 == Discovery And Selection Phase ==
