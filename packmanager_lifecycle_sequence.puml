@@ -8,87 +8,98 @@ skinparam ParticipantPadding 20
 skinparam BoxPadding 10
 actor User
 participant "AI Gateway" as Gateway
+participant "MeteringService" as meter
+participant "CapabilityRouter" as cap_router
+participant "IntentManager" as intent_manager
 participant "PackManager" as PM
 database "PackRegistry" as Registry
-database "PackStaging" as Staging
 database "RollbackRegistry" as RollRegistry
-participant "CapabilitytIdentifier\n(Cloud)" as Capability
 participant "PackServer\n(Cloud)" as PackCloud
-participant "PackRuntime" as Plugin
+participant "PackRunner" as Plugin
 participant "AI Pack" as AIPack
 participant "AI Capability Provider" as cap_provider
 == Discovery And Selection Phase ==
 Gateway -> PM: initialize()
-User -> Gateway: userRequest(skill)
 PM -> PackCloud: getCapabilityList()
 PackCloud --> PM: capabilityList
 PM -> Registry: updateCapabilities(capabilityList)
-Registry --> PM: registered
-PM -> Capability: identifyCapability(skill, capabilityList)
-Capability --> PM: capability identified
-PM -> Registry: isCapabilitySupported(capability)
-Registry --> PM: capable / not capable
-alt Not capable
- PM --> Gateway: not capable
- Gateway --> User: unableToServe()
-else Capable
- PM -> cap_provider: getDeviceCapability()
- cap_provider --> PM: device capabilities
- PM -> Registry: checkForLocalPack(capability, device_capability)
- Registry --> PM: Pack found/not found
+Registry --> PM: updated
+User -> Gateway: user/app(input)
+Gateway -> cap_router: invoke(input)
+cap_router -> intent_manager: identifyIntent(input)
+intent_manager --> cap_router: skill identified
+cap_router -> PM: getCapabilityList()
+PM --> cap_router: capability_list
+cap_router -> cap_router: normalizeCapability(skill, capabilityList)
+cap_router -> PM: getLocalPacks(capability)
+PM --> cap_router: pack_list
+
  alt Local Pack Found
   PM -> Registry: checkPackInstallation(pack_id)
   Registry --> PM: installed / not installed
   alt Pack Installed
-   note over PM,Registry
-     Pack is already installed and ready to use.
-   end note
+   PM -> PM: isEnabled()
+    alt Pack Enabled
+      note over PM,Registry
+        Pack is already installed and ready to use.
+      end note
+    else Pack Disabled
+      PM --> Gateway: publish(pack_disabled, pack_id)
+      Gateway --> User: pack is currently disabled, Enable it to use
+    end
   else Pack Not Installed
    PM -> PM: installPack(pack_id)
   end
  else No Local Pack
-  PM -> PackCloud: getCompatibleCloudPacks(capability, device_capability)
-  PackCloud --> PM: cloud compatible packs
-  PM --> Gateway: compatible packs list\n(pack_info)
-  Gateway --> User: showPackListAndRequestSelection()
+  cap_router-> cap_provider: getDeviceCapability()
+  cap_provider --> cap_router: device capabilities  
+  cap_router-> PackCloud: getCompatibleCloudPacks(capability, device_capability)
+  PackCloud --> cap_router: cloud compatible packs
+  cap_router--> Gateway: compatible packs list\n(pack_info)
+  Gateway--> User: showPackListAndRequestSelection()
   User -> Gateway: usePack(pack_id)
+  Gateway -> cap_router: usePack(pack_id)
  end
  == Installation Phase ==
-  Gateway -> PM: installPack(pack_id)
+  cap_router-> PM: installPack(pack_id)
   PM -> PackCloud: getPackDetails(pack_id)
   PackCloud --> PM: json(URL + pack metadata(md5sum, capability, dependencies, etc.))
 
   PM -> PackCloud: downloadPack(pack_url)
   PackCloud --> PM: package content
-  PM -> Staging: stageDownloadedPack(pack_id)
-  Staging --> PM: staged package reference
+  PM -> Registry: stageDownloadedPack(pack_id)
+  Registry --> PM: staged package reference
   PM -> PM: verifyMD5(staged package, md5sum)
   alt MD5 verified
     loop Resolve each dependency
       PM -> PM: install(dependency_id)
     end
-    PM -> Staging: installFromStage(pack_id, version)
+    PM -> Registry: installFromStage(pack_id, version)
     PM -> PM: install(pack.ipk)
     PM -> Registry: registerPack(pack_id, version)
     PM -> Registry: updateStatus(pack_id, Installed)
     Registry --> PM: OK
     PM --> Gateway: publish(pack_installed, pack_id)
   else MD5 verification failed
-    PM -> Staging: discardStagedPack(pack_id)
-    Staging --> PM: staged package removed
+    PM -> Registry: discardStagedPack(pack_id)
+    Registry --> PM: staged package removed
     PM -> Registry: updateStatus(pack_id, InstallFailed)
     Registry --> PM: OK
     PM --> Gateway: publish(pack_download_verification_failed, pack_id)
     Gateway --> User: installation failed due to checksum mismatch
  == Enable Phase ==
- Gateway -> PM: enablePack(user_id, pack_id)
+note over Gateway
+  Pack should be enabled by User or MeteringService
+end note
+ Gateway -> PM: enablePack(pack_id)
  PM -> Registry: checkPackState(pack_id)
  Registry --> PM: Installed / Disabled
- PM -> Registry: updateStatus(user_id, pack_id, Enabled)
+ PM -> Registry: updateStatus(pack_id, Enabled)
  Registry --> PM: OK
- PM --> Gateway: publish(pack_enabled, user_id, pack_id)
+ PM --> Gateway: publish(pack_enabled, pack_id)
  == Loading Phase ==
- Gateway -> PM: loadPack(user_id, pack_id)
+ meter -> PM: activate(pack_id)
+ PM -> PM: loadPack(pack_id)
  PM -> Registry: checkPackState(pack_id)
  Registry --> PM: Enabled / Disabled
  alt Pack Disabled
@@ -107,26 +118,25 @@ else Capable
     AIPack --> Plugin: status OK / activation failed
     alt Activation successful
       Plugin --> PM: initialized
-      PM -> Registry: updateStatus(user_id, pack_id, Loaded)
+      PM -> Registry: updateStatus(pack_id, Loaded)
       Registry --> PM: OK
-      PM --> Gateway: publish(pack_loaded, user_id, pack_id)
+      PM --> Gateway: publish(pack_loaded, pack_id)
     else Activation failed
       Plugin --> PM: activation failed
-      PM -> Registry: updateStatus(user_id, pack_id, activation_failed)
+      PM -> Registry: updateStatus(pack_id, activation_failed)
       Registry --> PM: OK
-      PM --> Gateway: publish(pack_activation_failed, user_id, pack_id)
+      PM --> Gateway: publish(pack_activation_failed, pack_id)
       Gateway --> User: pack activation failed
     end
   else ABI incompatible
-    PM -> Registry: updateStatus(user_id, pack_id, incompatible_abi)
+    PM -> Registry: updateStatus(pack_id, incompatible_abi)
     Registry --> PM: OK
-    PM --> Gateway: publish(pack_blocked_incompatible_abi, user_id, pack_id)
+    PM --> Gateway: publish(pack_blocked_incompatible_abi, pack_id)
     Gateway --> User: pack cannot be loaded on this runtime
   end
  end
  == Usage Phase ==
- User -> Gateway: serviceRequest(user_id, pack_id, input)
-  Gateway -> PM: getService<T>(user_id, pack_id)
+  cap_router-> PM: getService<T>(pack_id)
   PM -> Registry: checkPackState(pack_id)
   Registry --> PM: Loaded / Not loaded
   alt Pack not loaded
@@ -138,25 +148,28 @@ else Capable
       Existing loaded instance is reused.
     end note
   end
-  PM -> Plugin: get(user_id, pack_id)
+  PM -> Plugin: get(pack_id)
   Plugin --> PM: PackHandle<T>
-  PM --> Gateway: PackHandle<T>
-  Gateway -> AIPack: service.method("getInference", input)
-  AIPack --> Gateway: response / inference
-  Gateway --> User: response
+  PM -> AIPack: service.method(userQuery)
+  AIPack --> PM: result
+  PM --> cap_router: publish(response, pack_id)
+  cap_router --> Gateway: response()
+  Gateway --> User: result / inference
  == Unload Phase ==
- Gateway -> PM: unloadPack(user_id, pack_id)
-PM -> Registry: checkPackState(pack_id)
+ meter -> PM: deactivate(pack_id)
+ PM -> PM: unloadPack(pack_id)
+ PM -> Registry: checkPackState(pack_id)
  Registry --> PM: Loaded / Not loaded
  PM -> Plugin: destroyPlugin(pack_id)
  Plugin -> AIPack: destroy()
  AIPack --> Plugin: destroyed
  Plugin --> PM: unloaded
- PM -> Registry: updateStatus(user_id, pack_id, Unloaded)
+ PM -> Registry: updateStatus(pack_id, Unloaded)
  Registry --> PM: OK
- PM --> Gateway: publish(pack_unloaded, user_id, pack_id)
+ PM --> cap_router: publish(pack_unloaded, pack_id)
+ cap_router --> Gateway: response(pack_unloaded)
  == Disable Phase ==
- Gateway -> PM: disablePack(user_id, pack_id)
+ Gateway -> PM: disablePack(pack_id)
  PM -> Registry: checkPackState(pack_id)
  Registry --> PM: Loaded / Not loaded
  opt Pack currently loaded
@@ -164,9 +177,9 @@ PM -> Registry: checkPackState(pack_id)
      If pack is loaded, initiate "Unload Phase" first.
    end note
  end
- PM -> Registry: updateStatus(user_id, pack_id, Disabled)
+ PM -> Registry: updateStatus(pack_id, Disabled)
  Registry --> PM: OK
- PM --> Gateway: publish(pack_disabled, user_id, pack_id)
+ PM --> Gateway: publish(pack_disabled, pack_id)
  == Uninstallation Phase ==
  Gateway -> PM: uninstallPack(pack_id)
  PM -> Registry: checkPackState(pack_id)

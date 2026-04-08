@@ -105,7 +105,7 @@ Use Python 3.10+ if you want ONNX-backed inference in the sample helper:
 /opt/homebrew/bin/python3.10 -m venv .venv
 source .venv/bin/activate
 pip install -r catalog_service/requirements.txt
-python catalog_service/app.py
+python catalog_service/app.py --host 192.168.1.100
 ```
 
 ## Running the Edge Daemon

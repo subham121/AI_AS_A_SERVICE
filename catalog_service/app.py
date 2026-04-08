@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 import os
@@ -274,6 +275,11 @@ def query_packs():
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Run the Catalog Service")
+    parser.add_argument("--host", default="127.0.0.1", help="Host IP address to bind to (default: 127.0.0.1)")
+    parser.add_argument("--port", type=int, default=5001, help="Port to bind to (default: 5001)")
+    args = parser.parse_args()
+
     ensure_schema()
     reindex()
-    app.run(host="127.0.0.1", port=5001, debug=False)
+    app.run(host=args.host, port=args.port, debug=False)
