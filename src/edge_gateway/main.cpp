@@ -1,4 +1,5 @@
 #include <edgeai/ai_gateway_service.h>
+#include <edgeai/capability_router.h>
 #include <edgeai/json_utils.h>
 #include <edgeai/pack_manager.h>
 
@@ -19,6 +20,7 @@ Json::Value defaultDeviceCapability() {
     value["architecture"] = "x86_64";
 #endif
     value["ram_mb"] = 2048;
+    value["cpu_cores"] = 4;
     value["accelerators"] = Json::Value(Json::arrayValue);
     return value;
 }
@@ -47,7 +49,10 @@ int main(int argc, char** argv) {
             defaultDeviceCapability());
         manager.initialize();
 
-        edgeai::AIGatewayService service(manager);
+        edgeai::CapabilityRouter capability_router(manager,
+                                                   EDGEAI_DEFAULT_CATALOG_URL,
+                                                   defaultDeviceCapability());
+        edgeai::AIGatewayService service(manager, capability_router);
         service.run();
     } catch (const std::exception& ex) {
         std::cerr << "edge_gatewayd failed: " << ex.what() << '\n';

@@ -30,6 +30,13 @@ class PackManager {
     void setEventSink(PackEventSink* sink) { sink_ = sink; }
 
     Json::Value initialize();
+    Json::Value getCapabilityList();
+    Json::Value cacheCapabilityList(const Json::Value& capability_response) const;
+    Json::Value cacheCompatiblePackList(const std::string& capability,
+                                        const Json::Value& device_capability,
+                                        const Json::Value& compatible_response) const;
+    Json::Value getLocalPacks(const std::string& capability);
+    Json::Value preparePackForUse(const std::string& user_id, const std::string& pack_id, bool approve_dependencies);
     Json::Value handleUserRequest(const std::string& user_id, const std::string& skill, const Json::Value& device_capability);
     Json::Value queryPacks(const std::string& capability, const Json::Value& device_capability);
     Json::Value installPack(const std::string& user_id, const std::string& pack_id, bool approve_dependencies);
@@ -46,9 +53,12 @@ class PackManager {
     void storeRegistry(const Json::Value& registry) const;
     Json::Value loadRollbackRegistry() const;
     void storeRollbackRegistry(const Json::Value& registry) const;
+    Json::Value refreshCapabilityList(Json::Value* registry = nullptr) const;
     Json::Value fetchCapabilityList() const;
     std::string identifyCapability(const std::string& skill, const Json::Value& capability_list) const;
     Json::Value fetchPackMetadata(const std::string& pack_id) const;
+    Json::Value cachePackServerDetails(const std::string& pack_id, const Json::Value& pack_details) const;
+    Json::Value normalizePackServerDetails(const Json::Value& pack_details) const;
     Json::Value findLocalPackForCapability(const Json::Value& registry,
                                            const std::string& capability,
                                            const Json::Value& device_capability) const;
@@ -58,6 +68,7 @@ class PackManager {
     Json::Value deviceCapabilityFor(const Json::Value& override_capability) const;
     std::string userPackState(const Json::Value& registry, const std::string& user_id, const std::string& pack_id) const;
     bool isPackInstalled(const Json::Value& pack_entry) const;
+    bool isPackEnabledState(const std::string& state) const;
     bool packSupportsCapability(const Json::Value& pack_entry, const std::string& capability) const;
     bool capabilityMatches(const Json::Value& required, const Json::Value& actual) const;
     void publishEvent(const std::string& phase,

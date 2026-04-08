@@ -1,15 +1,12 @@
 #include <edgeai/fs_utils.h>
 #include <edgeai/json_utils.h>
 #include <edgeai/pack_abi.h>
-
-#include "next_word_engine.h"
+#include <edgeai/process_utils.h>
 
 #include <dlfcn.h>
 
-#include <cstdio>
+#include <cstring>
 #include <filesystem>
-#include <memory>
-#include <new>
 #include <stdexcept>
 #include <string>
 
@@ -17,15 +14,9 @@ namespace {
 
 struct NextWordPackState {
     std::filesystem::path pack_root;
-    std::unique_ptr<edgeai::NextWordEngine> engine;
-    void (*log)(int, const char*) = nullptr;
+    std::filesystem::path state_dir;
+    std::string config_json = "{}";
 };
-
-void logError(const NextWordPackState* state, const std::string& message) {
-    if (state && state->log) {
-        state->log(3, message.c_str());
-    }
-}
 
 std::filesystem::path selfLibraryPath() {
     Dl_info info{};
@@ -44,83 +35,74 @@ const char* manifestJson() {
     return manifest.c_str();
 }
 
-int activate(void* user_data, const char* activation_json) {
+int activate(void* user_data, const char* /*activation_json*/) {
     auto* state = static_cast<NextWordPackState*>(user_data);
     const auto manifest_path = state->pack_root / "manifest.json";
+    const auto helper_path = state->pack_root / "runtime" / "next_word_helper.py";
     const auto model_path = state->pack_root / "model" / "next_word_bigram.onnx";
-    const auto vocab_path = state->pack_root / "model" / "vocab.json";
-    const auto transitions_path = state->pack_root / "model" / "transitions.json";
-    if (!state || !state->engine || !std::filesystem::exists(manifest_path) || !std::filesystem::exists(model_path) ||
-        !std::filesystem::exists(vocab_path) || !std::filesystem::exists(transitions_path)) {
+    if (!std::filesystem::exists(manifest_path) || !std::filesystem::exists(helper_path) || !std::filesystem::exists(model_path)) {
         return -1;
     }
-    try {
-        state->engine->activate(activation_json ? activation_json : "{}");
-        return 0;
-    } catch (const std::exception& ex) {
-        logError(state, std::string("activate failed: ") + ex.what());
-        return -1;
-    } catch (...) {
-        logError(state, "activate failed: unknown error");
-        return -1;
-    }
+    return 0;
 }
 
 int configure(void* user_data, const char* config_json) {
     auto* state = static_cast<NextWordPackState*>(user_data);
-    if (!state || !state->engine) {
-        return -1;
-    }
-    try {
-        state->engine->configure(config_json ? config_json : "{}");
-        return 0;
-    } catch (const std::exception& ex) {
-        logError(state, std::string("configure failed: ") + ex.what());
-        return -1;
-    } catch (...) {
-        logError(state, "configure failed: unknown error");
-        return -1;
-    }
+    state->config_json = config_json ? config_json : "{}";
+    return 0;
 }
 
 int predict(void* user_data, const EdgeAIPackRequestV1* request, EdgeAIPackResponseV1* response) {
     auto* state = static_cast<NextWordPackState*>(user_data);
-    if (!state || !state->engine || !response) {
+    if (!state || !response) {
         return -1;
     }
-    try {
-        const Json::Value result = state->engine->predict(request && request->prompt ? request->prompt : "",
-                                                          request && request->options_json ? request->options_json : "{}");
-        std::snprintf(response->output_text, sizeof(response->output_text), "%s", result.get("result", "").asCString());
-        std::snprintf(response->metadata_json,
-                      sizeof(response->metadata_json),
-                      "%s",
-                      edgeai::toJsonString(result["metadata"]).c_str());
-        return 0;
-    } catch (const std::exception& ex) {
-        logError(state, std::string("predict failed: ") + ex.what());
-        return -1;
-    } catch (...) {
-        logError(state, "predict failed: unknown error");
+
+    const auto work_dir = state->state_dir / "next_word_runtime";
+    edgeai::ensureDirectory(work_dir);
+
+    Json::Value request_json(Json::objectValue);
+    request_json["prompt"] = request && request->prompt ? request->prompt : "";
+    if (request && request->options_json && std::strlen(request->options_json) > 0) {
+        request_json["options"] = edgeai::parseJson(request->options_json);
+    } else {
+        request_json["options"] = Json::Value(Json::objectValue);
+    }
+    request_json["config"] = edgeai::parseJson(state->config_json);
+
+    const auto request_path = edgeai::makeTempJson(work_dir, "request", edgeai::toJsonString(request_json));
+    const auto response_path = work_dir / (request_path.stem().string() + "_response.json");
+    const char* python = std::getenv("EDGEAI_PYTHON");
+    const std::string python_bin = python ? python : "python3";
+    const auto helper = state->pack_root / "runtime" / "next_word_helper.py";
+
+    auto result = edgeai::runCommandCapture({
+        python_bin,
+        helper.string(),
+        "--request",
+        request_path.string(),
+        "--response",
+        response_path.string(),
+        "--pack-root",
+        state->pack_root.string(),
+    });
+    if (result.exit_code != 0 || !std::filesystem::exists(response_path)) {
         return -1;
     }
+
+    const Json::Value helper_response = edgeai::parseJson(edgeai::readTextFile(response_path));
+    std::snprintf(response->output_text, sizeof(response->output_text), "%s", helper_response.get("result", "").asCString());
+    std::snprintf(response->metadata_json,
+                  sizeof(response->metadata_json),
+                  "%s",
+                  edgeai::toJsonString(helper_response["metadata"]).c_str());
+    std::filesystem::remove(request_path);
+    std::filesystem::remove(response_path);
+    return 0;
 }
 
-int deactivate(void* user_data) {
-    auto* state = static_cast<NextWordPackState*>(user_data);
-    if (!state || !state->engine) {
-        return 0;
-    }
-    try {
-        state->engine->deactivate();
-        return 0;
-    } catch (const std::exception& ex) {
-        logError(state, std::string("deactivate failed: ") + ex.what());
-        return -1;
-    } catch (...) {
-        logError(state, "deactivate failed: unknown error");
-        return -1;
-    }
+int deactivate(void* /*user_data*/) {
+    return 0;
 }
 
 void destroy(void* user_data) {
@@ -141,20 +123,10 @@ extern "C" int edgeai_pack_create(const EdgeAIPackHostV1* host, EdgeAIPackInstan
     if (!host || !instance) {
         return -1;
     }
-    auto* state = new (std::nothrow) NextWordPackState;
-    if (!state) {
-        return -1;
-    }
-    try {
-        const auto pack_root = host->pack_root ? std::filesystem::path(host->pack_root) : discoverPackRoot();
-        const auto state_dir = host->state_dir ? std::filesystem::path(host->state_dir) : std::filesystem::temp_directory_path();
-        state->pack_root = pack_root;
-        state->log = host->log;
-        state->engine = std::make_unique<edgeai::NextWordEngine>(pack_root, state_dir, host->log);
-    } catch (...) {
-        delete state;
-        return -1;
-    }
+    auto* state = new NextWordPackState{
+        .pack_root = host->pack_root ? std::filesystem::path(host->pack_root) : discoverPackRoot(),
+        .state_dir = host->state_dir ? std::filesystem::path(host->state_dir) : std::filesystem::temp_directory_path(),
+    };
 
     auto* pack_instance = new EdgeAIPackInstanceV1{
         .user_data = state,

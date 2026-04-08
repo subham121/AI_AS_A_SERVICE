@@ -1,5 +1,6 @@
 #pragma once
 
+#include <edgeai/capability_router.h>
 #include <edgeai/pack_manager.h>
 
 #include <gio/gio.h>
@@ -11,7 +12,7 @@ namespace edgeai {
 
 class AIGatewayService : public PackEventSink {
   public:
-    explicit AIGatewayService(PackManager& manager);
+    AIGatewayService(PackManager& manager, CapabilityRouter& capability_router);
     ~AIGatewayService() override;
 
     AIGatewayService(const AIGatewayService&) = delete;
@@ -36,6 +37,7 @@ class AIGatewayService : public PackEventSink {
     Json::Value dispatch(const std::string& method, GVariant* parameters);
 
     PackManager& manager_;
+    CapabilityRouter& capability_router_;
     GMainLoop* loop_ = nullptr;
     GDBusNodeInfo* introspection_data_ = nullptr;
     GDBusConnection* connection_ = nullptr;

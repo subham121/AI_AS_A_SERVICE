@@ -3,7 +3,11 @@
 #include <edgeai/pack_manager.h>
 
 #include <algorithm>
+#include <cctype>
+#include <iostream>
 #include <stdexcept>
+#include <tuple>
+#include <vector>
 
 namespace edgeai {
 
@@ -18,6 +22,9 @@ Json::Value emptyRegistry() {
     registry["packs"] = Json::Value(Json::objectValue);
     registry["users"] = Json::Value(Json::objectValue);
     registry["capabilities"] = Json::Value(Json::arrayValue);
+    registry["pack_server_cache"] = Json::Value(Json::objectValue);
+    registry["pack_server_cache"]["compatible_packs"] = Json::Value(Json::objectValue);
+    registry["pack_server_cache"]["pack_details"] = Json::Value(Json::objectValue);
     return registry;
 }
 
@@ -47,6 +54,77 @@ bool jsonArrayContains(const Json::Value& array, const std::string& value) {
     return false;
 }
 
+std::string normalizeText(const std::string& text) {
+    std::string normalized;
+    normalized.reserve(text.size());
+    for (char ch : text) {
+        if (std::isalnum(static_cast<unsigned char>(ch))) {
+            normalized.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
+        } else {
+            normalized.push_back(' ');
+        }
+    }
+
+    std::string collapsed;
+    collapsed.reserve(normalized.size());
+    bool previous_space = true;
+    for (char ch : normalized) {
+        if (ch == ' ') {
+            if (!previous_space) {
+                collapsed.push_back(ch);
+            }
+            previous_space = true;
+        } else {
+            collapsed.push_back(ch);
+            previous_space = false;
+        }
+    }
+    while (!collapsed.empty() && collapsed.front() == ' ') {
+        collapsed.erase(collapsed.begin());
+    }
+    while (!collapsed.empty() && collapsed.back() == ' ') {
+        collapsed.pop_back();
+    }
+    return collapsed;
+}
+
+std::vector<std::string> splitTerms(const std::string& normalized) {
+    std::vector<std::string> terms;
+    std::string current;
+    for (char ch : normalized) {
+        if (ch == ' ') {
+            if (!current.empty()) {
+                terms.push_back(current);
+                current.clear();
+            }
+        } else {
+            current.push_back(ch);
+        }
+    }
+    if (!current.empty()) {
+        terms.push_back(current);
+    }
+    return terms;
+}
+
+bool containsTerm(const std::vector<std::string>& haystack, const std::string& needle) {
+    return std::find(haystack.begin(), haystack.end(), needle) != haystack.end();
+}
+
+int intersectionScore(const std::vector<std::string>& left, const std::vector<std::string>& right) {
+    int matches = 0;
+    for (const auto& term : left) {
+        if (containsTerm(right, term)) {
+            ++matches;
+        }
+    }
+    return matches;
+}
+
+void logPackManager(const std::string& message) {
+    std::cerr << "[PackManager] " << message << std::endl;
+}
+
 }  // namespace
 
 PackManager::PackManager(std::filesystem::path state_dir,
@@ -63,6 +141,9 @@ PackManager::PackManager(std::filesystem::path state_dir,
       default_device_capability_(std::move(default_device_capability)) {}
 
 Json::Value PackManager::initialize() {
+    logPackManager("Initializing state_dir=" + state_dir_.string() +
+                   " staging_dir=" + staging_dir_.string() +
+                   " install_dir=" + install_dir_.string());
     ensureDirectory(state_dir_);
     ensureDirectory(staging_dir_);
     ensureDirectory(install_dir_);
@@ -72,18 +153,151 @@ Json::Value PackManager::initialize() {
     if (!std::filesystem::exists(rollback_path_)) {
         storeRollbackRegistry(emptyRollbackRegistry());
     }
+    try {
+        Json::Value registry = loadRegistry();
+        if (!registry.isMember("pack_server_cache") || !registry["pack_server_cache"].isObject()) {
+            registry["pack_server_cache"] = Json::Value(Json::objectValue);
+            registry["pack_server_cache"]["compatible_packs"] = Json::Value(Json::objectValue);
+            registry["pack_server_cache"]["pack_details"] = Json::Value(Json::objectValue);
+            storeRegistry(registry);
+        }
+        if (!registry.isMember("capabilities") || !registry["capabilities"].isArray() || registry["capabilities"].empty()) {
+            logPackManager("Capability cache empty, refreshing from pack server");
+            refreshCapabilityList(&registry);
+        }
+    } catch (const std::exception& ex) {
+        logPackManager(std::string("Initialization continued without remote refresh: ") + ex.what());
+    }
     return makeStatus("ok", "PackManager initialized");
+}
+
+Json::Value PackManager::getCapabilityList() {
+    initialize();
+    Json::Value registry = loadRegistry();
+    Json::Value capabilities = registry.get("capabilities", Json::Value(Json::arrayValue));
+    if (!capabilities.isArray() || capabilities.empty()) {
+        const Json::Value refreshed = refreshCapabilityList(&registry);
+        capabilities = refreshed.get("capabilities", Json::Value(Json::arrayValue));
+    }
+    logPackManager("Returning capability list count=" + std::to_string(capabilities.size()));
+
+    Json::Value response(Json::objectValue);
+    response["capabilities"] = capabilities;
+    response["count"] = capabilities.size();
+    return response;
+}
+
+Json::Value PackManager::cacheCapabilityList(const Json::Value& capability_response) const {
+    Json::Value registry = loadRegistry();
+    registry["capabilities"] = capability_response.get("capabilities", Json::Value(Json::arrayValue));
+    registry["pack_server_cache"]["capability_list"] = capability_response;
+    storeRegistry(registry);
+    logPackManager("Cached capability list count=" +
+                   std::to_string(capability_response.get("count", registry["capabilities"].size()).asUInt()));
+    return capability_response;
+}
+
+Json::Value PackManager::cacheCompatiblePackList(const std::string& capability,
+                                                 const Json::Value& device_capability,
+                                                 const Json::Value& compatible_response) const {
+    Json::Value registry = loadRegistry();
+    Json::Value cached(Json::objectValue);
+    cached["capability"] = capability;
+    cached["device_capability"] = device_capability;
+    cached["response"] = compatible_response;
+    registry["pack_server_cache"]["compatible_packs"][capability] = cached;
+    const Json::Value packs = compatible_response.get("packs", Json::Value(Json::arrayValue));
+    for (const auto& pack : packs) {
+        if (pack.isObject() && pack.isMember("pack_id")) {
+            registry["pack_server_cache"]["pack_summaries"][pack["pack_id"].asString()] = pack;
+        }
+    }
+    storeRegistry(registry);
+    logPackManager("Cached compatible pack list capability=" + capability +
+                   " count=" + std::to_string(compatible_response.get("count", packs.size()).asUInt()));
+    return compatible_response;
+}
+
+Json::Value PackManager::getLocalPacks(const std::string& capability) {
+    initialize();
+    logPackManager("Checking local packs for capability=" + capability);
+    Json::Value registry = loadRegistry();
+    std::vector<Json::Value> matches;
+    if (registry.isMember("packs") && registry["packs"].isObject()) {
+        for (const auto& pack_id : registry["packs"].getMemberNames()) {
+            const Json::Value& pack_entry = registry["packs"][pack_id];
+            if (!packSupportsCapability(pack_entry, capability)) {
+                continue;
+            }
+
+            Json::Value pack(Json::objectValue);
+            pack["pack_id"] = pack_id;
+            pack["pack"] = pack_entry;
+            pack["installed"] = isPackInstalled(pack_entry);
+            pack["state"] = normalizeStatus(pack_entry, "");
+            matches.push_back(pack);
+        }
+    }
+
+    std::sort(matches.begin(), matches.end(), [](const Json::Value& left, const Json::Value& right) {
+        const bool left_installed = left.get("installed", false).asBool();
+        const bool right_installed = right.get("installed", false).asBool();
+        if (left_installed != right_installed) {
+            return left_installed && !right_installed;
+        }
+        return left.get("pack_id", "").asString() < right.get("pack_id", "").asString();
+    });
+
+    Json::Value packs(Json::arrayValue);
+    for (const auto& pack : matches) {
+        packs.append(pack);
+    }
+
+    Json::Value response(Json::objectValue);
+    response["packs"] = packs;
+    response["count"] = packs.size();
+    logPackManager("Local pack lookup capability=" + capability + " count=" + std::to_string(packs.size()));
+    return response;
+}
+
+Json::Value PackManager::preparePackForUse(const std::string& user_id, const std::string& pack_id, bool approve_dependencies) {
+    initialize();
+    logPackManager("Preparing pack for use pack_id=" + pack_id + " user_id=" + user_id);
+    Json::Value registry = loadRegistry();
+    if (!registry["packs"].isMember(pack_id)) {
+        return makeStatus("error", "Pack is not registered locally");
+    }
+
+    const Json::Value pack_entry = registry["packs"][pack_id];
+    Json::Value response(Json::objectValue);
+    response["pack_id"] = pack_id;
+    response["pack"] = pack_entry;
+
+    if (!isPackInstalled(pack_entry)) {
+        response["status"] = "install_started";
+        response["install_result"] = installPack(user_id, pack_id, approve_dependencies);
+        return response;
+    }
+
+    const std::string state = userPackState(registry, user_id, pack_id);
+    if (isPackEnabledState(state)) {
+        response["status"] = "ready";
+        response["message"] = "Pack is already installed and ready to use";
+        return response;
+    }
+
+    publishEvent("discovery", "pack_disabled", pack_id, user_id);
+    response["status"] = "disabled";
+    response["message"] = "Pack is currently disabled, enable it to use";
+    return response;
 }
 
 Json::Value PackManager::handleUserRequest(const std::string& user_id, const std::string& skill, const Json::Value& device_capability) {
     initialize();
-    Json::Value registry = loadRegistry();
     const Json::Value actual_device_capability = deviceCapabilityFor(device_capability);
 
-    const Json::Value capability_response = fetchCapabilityList();
+    const Json::Value capability_response = getCapabilityList();
     const Json::Value capability_list = capability_response.get("capabilities", Json::Value(Json::arrayValue));
-    registry["capabilities"] = capability_list;
-    storeRegistry(registry);
 
     std::string capability;
     try {
@@ -99,22 +313,14 @@ Json::Value PackManager::handleUserRequest(const std::string& user_id, const std
     response["capability"] = capability;
     response["device_capability"] = actual_device_capability;
 
-    Json::Value local_pack = findLocalPackForCapability(registry, capability, actual_device_capability);
-    if (local_pack.get("found", false).asBool()) {
-        const std::string pack_id = local_pack["pack_id"].asString();
+    Json::Value local_packs = getLocalPacks(capability);
+    if (local_packs.get("count", 0).asUInt() > 0U) {
+        const Json::Value local_pack = local_packs["packs"][0];
+        const std::string pack_id = local_pack.get("pack_id", "").asString();
         response["source"] = "local";
         response["pack"] = local_pack["pack"];
         response["pack_id"] = pack_id;
-
-        if (local_pack.get("installed", false).asBool()) {
-            response["message"] = "Pack is already installed and ready to use";
-            publishEvent("discovery", "local_pack_ready", pack_id, user_id, response["pack"]);
-            return response;
-        }
-
-        const Json::Value install_result = installPack(user_id, pack_id, true);
-        response["message"] = "Local pack installation initiated";
-        response["install_result"] = install_result;
+        response["prepare_result"] = preparePackForUse(user_id, pack_id, true);
         return response;
     }
 
@@ -134,14 +340,19 @@ Json::Value PackManager::handleUserRequest(const std::string& user_id, const std
 }
 
 Json::Value PackManager::queryPacks(const std::string& capability, const Json::Value& device_capability) {
-    Json::Value payload(Json::objectValue);
-    payload["capability"] = capability;
-    payload["device_capability"] = deviceCapabilityFor(device_capability);
-    return http_client_.postJson(catalog_url_ + "/packs/query", payload);
+    const Json::Value actual_device_capability = deviceCapabilityFor(device_capability);
+    const std::string url = catalog_url_ + "/getCompatiblePackList?capability=" + http_client_.urlEncode(capability) +
+                            "&device_capability=" + http_client_.urlEncode(toJsonString(actual_device_capability));
+    logPackManager("Querying compatible packs capability=" + capability +
+                   " device_capability=" + toJsonString(actual_device_capability));
+    const Json::Value response = http_client_.getJson(url);
+    cacheCompatiblePackList(capability, actual_device_capability, response);
+    return response;
 }
 
 Json::Value PackManager::installPack(const std::string& user_id, const std::string& pack_id, bool approve_dependencies) {
     initialize();
+    logPackManager("Starting install phase pack_id=" + pack_id + " user_id=" + user_id);
     Json::Value registry = loadRegistry();
     Json::Value metadata = fetchPackMetadata(pack_id);
     Json::Value pack_entry = registry["packs"][pack_id];
@@ -152,8 +363,14 @@ Json::Value PackManager::installPack(const std::string& user_id, const std::stri
         return makeStatus("skipped", "Pack already installed at requested version");
     }
 
+    const std::string package_url = metadata.get("package_url", "").asString();
+    if (package_url.empty()) {
+        publishEvent("install", "package_url_missing", pack_id, user_id);
+        return makeStatus("error", "Pack details did not include a package URL");
+    }
     const auto staged_archive = staging_dir_ / (pack_id + "-" + version + ".tar.gz");
-    http_client_.downloadToFile(metadata["package_url"].asString(), staged_archive);
+    logPackManager("Downloading pack archive pack_id=" + pack_id + " url=" + package_url);
+    http_client_.downloadToFile(package_url, staged_archive);
     const std::string actual_md5 = computeMd5(staged_archive);
     const std::string expected_md5 = metadata.get("md5", "").asString();
     if (!expected_md5.empty() && expected_md5 != actual_md5) {
@@ -162,6 +379,11 @@ Json::Value PackManager::installPack(const std::string& user_id, const std::stri
         storeRegistry(registry);
         publishEvent("install", "verification_failed", pack_id, user_id);
         return makeStatus("error", "Downloaded pack failed md5 verification");
+    }
+    if (expected_md5.empty()) {
+        logPackManager("Pack server did not provide md5 for pack_id=" + pack_id + ", skipping md5 verification");
+    } else {
+        logPackManager("Verified md5 for pack_id=" + pack_id);
     }
 
     if (!capabilityMatches(metadata["device_capability"], default_device_capability_)) {
@@ -173,11 +395,13 @@ Json::Value PackManager::installPack(const std::string& user_id, const std::stri
     }
 
     if (metadata["dependencies"].isArray() && metadata["dependencies"].size() > 0 && !approve_dependencies) {
+        logPackManager("Dependency approval required for pack_id=" + pack_id);
         publishEvent("install", "dependency_approval_required", pack_id, user_id);
         return makeStatus("approval_required", "Dependency approval is required");
     }
 
     for (const auto& dependency : metadata["dependencies"]) {
+        logPackManager("Installing dependency pack_id=" + dependency.asString() + " for parent_pack=" + pack_id);
         const Json::Value dependency_result = installPack(user_id, dependency.asString(), true);
         if (dependency_result.get("status", "").asString() == "error") {
             return dependency_result;
@@ -199,6 +423,7 @@ Json::Value PackManager::installPack(const std::string& user_id, const std::stri
     if (!extractTarGz(staged_archive, install_root)) {
         throw std::runtime_error("Failed to install bundle archive for " + pack_id);
     }
+    logPackManager("Installed bundle into " + install_root.string());
 
     const auto manifest_path = install_root / "manifest.json";
     const PackManifest manifest = manifestFromFile(manifest_path);
@@ -217,6 +442,9 @@ Json::Value PackManager::installPack(const std::string& user_id, const std::stri
     installed["license"] = metadata["license"];
     installed["metering_unit"] = metadata["metering_unit"];
     installed["tags"] = metadata["tags"];
+    installed["pack_description"] = metadata.get("pack_description", "");
+    installed["pack_monetization"] = metadata.get("pack_monetization", Json::Value(Json::objectValue));
+    installed["pack_server_details"] = metadata.get("pack_server_details", Json::Value(Json::objectValue));
     registry["packs"][pack_id] = installed;
     storeRegistry(registry);
     publishEvent("install", "installed", pack_id, user_id, installed);
@@ -227,6 +455,7 @@ Json::Value PackManager::installPack(const std::string& user_id, const std::stri
 }
 
 Json::Value PackManager::enablePack(const std::string& user_id, const std::string& pack_id) {
+    logPackManager("Enable requested pack_id=" + pack_id + " user_id=" + user_id);
     Json::Value registry = loadRegistry();
     if (!registry["packs"].isMember(pack_id)) {
         return makeStatus("error", "Pack is not installed");
@@ -237,11 +466,13 @@ Json::Value PackManager::enablePack(const std::string& user_id, const std::strin
     auto& entry = userPackEntry(registry, user_id, pack_id);
     entry["status"] = "Enabled";
     storeRegistry(registry);
+    logPackManager("Pack state changed pack_id=" + pack_id + " user_id=" + user_id + " -> Enabled");
     publishEvent("enable", "enabled", pack_id, user_id);
     return makeStatus("ok", "Pack enabled");
 }
 
 Json::Value PackManager::loadPack(const std::string& user_id, const std::string& pack_id) {
+    logPackManager("Load requested pack_id=" + pack_id + " user_id=" + user_id);
     Json::Value registry = loadRegistry();
     if (!registry["packs"].isMember(pack_id)) {
         return makeStatus("error", "Pack is not installed");
@@ -268,6 +499,7 @@ Json::Value PackManager::loadPack(const std::string& user_id, const std::string&
         auto& user_entry = userPackEntry(registry, user_id, pack_id);
         user_entry["status"] = "incompatible_abi";
         storeRegistry(registry);
+        logPackManager("Pack state changed pack_id=" + pack_id + " user_id=" + user_id + " -> incompatible_abi");
         publishEvent("load", "incompatible_abi", pack_id, user_id);
         return makeStatus("error", "Pack cannot be loaded on this runtime");
     }
@@ -289,6 +521,7 @@ Json::Value PackManager::loadPack(const std::string& user_id, const std::string&
         auto& user_entry = userPackEntry(registry, user_id, pack_id);
         user_entry["status"] = "Loaded";
         storeRegistry(registry);
+        logPackManager("Pack state changed pack_id=" + pack_id + " user_id=" + user_id + " -> Loaded");
         publishEvent("load", "loaded", pack_id, user_id);
         return makeStatus("ok", "Pack loaded");
     } catch (const std::exception& ex) {
@@ -296,12 +529,14 @@ Json::Value PackManager::loadPack(const std::string& user_id, const std::string&
         user_entry["status"] = "activation_failed";
         user_entry["last_error"] = ex.what();
         storeRegistry(registry);
+        logPackManager("Pack activation failed pack_id=" + pack_id + " user_id=" + user_id + " error=" + ex.what());
         publishEvent("load", "activation_failed", pack_id, user_id);
         return makeStatus("error", ex.what());
     }
 }
 
 Json::Value PackManager::invoke(const std::string& user_id, const std::string& pack_id, const std::string& prompt, const std::string& options_json) {
+    logPackManager("Invoke requested pack_id=" + pack_id + " user_id=" + user_id + " prompt=" + prompt);
     Json::Value registry = loadRegistry();
     const std::string key = runtimeKey(user_id, pack_id);
     const std::string state = userPackState(registry, user_id, pack_id);
@@ -317,6 +552,7 @@ Json::Value PackManager::invoke(const std::string& user_id, const std::string& p
     auto& user_entry = userPackEntry(registry, user_id, pack_id);
     user_entry["last_invoked_prompt"] = prompt;
     storeRegistry(registry);
+    logPackManager("Invocation completed pack_id=" + pack_id + " user_id=" + user_id);
 
     Json::Value response = makeStatus("ok", "Invocation completed");
     response["result"] = result["result"];
@@ -326,6 +562,7 @@ Json::Value PackManager::invoke(const std::string& user_id, const std::string& p
 }
 
 Json::Value PackManager::unloadPack(const std::string& user_id, const std::string& pack_id) {
+    logPackManager("Unload requested pack_id=" + pack_id + " user_id=" + user_id);
     Json::Value registry = loadRegistry();
     const std::string state = userPackState(registry, user_id, pack_id);
     if (state != "Loaded") {
@@ -343,11 +580,13 @@ Json::Value PackManager::unloadPack(const std::string& user_id, const std::strin
     auto& user_entry = userPackEntry(registry, user_id, pack_id);
     user_entry["status"] = "Unloaded";
     storeRegistry(registry);
+    logPackManager("Pack state changed pack_id=" + pack_id + " user_id=" + user_id + " -> Unloaded");
     publishEvent("unload", "unloaded", pack_id, user_id);
     return makeStatus("ok", "Pack unloaded");
 }
 
 Json::Value PackManager::disablePack(const std::string& user_id, const std::string& pack_id) {
+    logPackManager("Disable requested pack_id=" + pack_id + " user_id=" + user_id);
     Json::Value registry = loadRegistry();
     if (userPackState(registry, user_id, pack_id) == "Loaded") {
         unloadPack(user_id, pack_id);
@@ -356,11 +595,14 @@ Json::Value PackManager::disablePack(const std::string& user_id, const std::stri
     auto& user_entry = userPackEntry(registry, user_id, pack_id);
     user_entry["status"] = "Disabled";
     storeRegistry(registry);
+    logPackManager("Pack state changed pack_id=" + pack_id + " user_id=" + user_id + " -> Disabled");
     publishEvent("disable", "disabled", pack_id, user_id);
     return makeStatus("ok", "Pack disabled");
 }
 
 Json::Value PackManager::uninstallPack(const std::string& user_id, const std::string& pack_id, bool force_shared_users) {
+    logPackManager("Uninstall requested pack_id=" + pack_id + " user_id=" + user_id +
+                   " force_shared_users=" + std::string(force_shared_users ? "true" : "false"));
     (void)force_shared_users;
     Json::Value registry = loadRegistry();
     if (!registry["packs"].isMember(pack_id)) {
@@ -392,11 +634,13 @@ Json::Value PackManager::uninstallPack(const std::string& user_id, const std::st
         registry["users"][user_name].removeMember(pack_id);
     }
     storeRegistry(registry);
+    logPackManager("Pack state changed pack_id=" + pack_id + " -> Uninstalled");
     publishEvent("uninstall", "uninstalled", pack_id, user_id);
     return makeStatus("ok", "Pack uninstalled");
 }
 
 Json::Value PackManager::rollbackPack(const std::string& user_id, const std::string& pack_id) {
+    logPackManager("Rollback requested pack_id=" + pack_id + " user_id=" + user_id);
     Json::Value rollback = loadRollbackRegistry();
     if (!rollback["history"].isMember(pack_id) || rollback["history"][pack_id].empty()) {
         publishEvent("rollback", "unavailable", pack_id, user_id);
@@ -420,6 +664,7 @@ Json::Value PackManager::rollbackPack(const std::string& user_id, const std::str
     registry["packs"][pack_id]["manifest_path"] = previous["manifest_path"];
     registry["packs"][pack_id]["status"] = "RolledBack";
     storeRegistry(registry);
+    logPackManager("Pack state changed pack_id=" + pack_id + " -> RolledBack");
     publishEvent("rollback", "rolled_back", pack_id, user_id, previous);
     return makeStatus("ok", "Pack rolled back to previous version");
 }
@@ -450,23 +695,154 @@ void PackManager::storeRollbackRegistry(const Json::Value& registry) const {
     writeTextFile(rollback_path_, toJsonString(registry, true));
 }
 
+Json::Value PackManager::refreshCapabilityList(Json::Value* registry) const {
+    Json::Value working = registry ? *registry : loadRegistry();
+    const Json::Value response = fetchCapabilityList();
+    if (response.isMember("capabilities") && response["capabilities"].isArray()) {
+        working["capabilities"] = response["capabilities"];
+        working["pack_server_cache"]["capability_list"] = response;
+        storeRegistry(working);
+        if (registry) {
+            *registry = working;
+        }
+        logPackManager("Refreshed capability list from pack server count=" + std::to_string(response["capabilities"].size()));
+    }
+    return response;
+}
+
 Json::Value PackManager::fetchCapabilityList() const {
-    return http_client_.getJson(catalog_url_ + "/capabilities");
+    const std::string url = catalog_url_ + "/getCapabilityList";
+    logPackManager("Fetching capability list url=" + url);
+    return http_client_.getJson(url);
 }
 
 std::string PackManager::identifyCapability(const std::string& skill, const Json::Value& capability_list) const {
-    Json::Value payload(Json::objectValue);
-    payload["skill"] = skill;
-    payload["capability_list"] = capability_list;
-    const Json::Value response = http_client_.postJson(catalog_url_ + "/capabilities/identify", payload);
-    if (response.get("status", "error").asString() != "ok" || !response.isMember("capability")) {
+    const std::string normalized_skill = normalizeText(skill);
+    if (normalized_skill.empty()) {
         throw std::runtime_error("Capability could not be identified");
     }
-    return response["capability"].asString();
+
+    const auto skill_terms = splitTerms(normalized_skill);
+    std::vector<std::tuple<int, std::size_t, std::string>> ranked;
+    for (const auto& item : capability_list) {
+        if (!item.isString()) {
+            continue;
+        }
+        const std::string capability = item.asString();
+        const std::string normalized_capability = normalizeText(capability);
+        if (normalized_capability.empty()) {
+            continue;
+        }
+
+        int score = 0;
+        if (normalized_capability == normalized_skill) {
+            score += 100;
+        }
+        if (normalized_skill.find(normalized_capability) != std::string::npos) {
+            score += 20;
+        }
+        score += intersectionScore(skill_terms, splitTerms(normalized_capability)) * 5;
+        if (score > 0) {
+            ranked.emplace_back(score, normalized_capability.size(), capability);
+        }
+    }
+
+    if (ranked.empty()) {
+        throw std::runtime_error("Capability could not be identified");
+    }
+
+    std::sort(ranked.begin(), ranked.end(), [](const auto& left, const auto& right) {
+        if (std::get<0>(left) != std::get<0>(right)) {
+            return std::get<0>(left) > std::get<0>(right);
+        }
+        if (std::get<1>(left) != std::get<1>(right)) {
+            return std::get<1>(left) < std::get<1>(right);
+        }
+        return std::get<2>(left) < std::get<2>(right);
+    });
+
+    const std::string capability = std::get<2>(ranked.front());
+    logPackManager("Identified capability='" + capability + "' from skill='" + skill + "'");
+    return capability;
 }
 
 Json::Value PackManager::fetchPackMetadata(const std::string& pack_id) const {
-    return http_client_.getJson(catalog_url_ + "/packs/" + pack_id);
+    const std::string url = catalog_url_ + "/getPackDetails?pack_id=" + http_client_.urlEncode(pack_id);
+    logPackManager("Fetching pack details pack_id=" + pack_id + " url=" + url);
+    const Json::Value pack_details = http_client_.getJson(url);
+    cachePackServerDetails(pack_id, pack_details);
+    return normalizePackServerDetails(pack_details);
+}
+
+Json::Value PackManager::cachePackServerDetails(const std::string& pack_id, const Json::Value& pack_details) const {
+    Json::Value registry = loadRegistry();
+    registry["pack_server_cache"]["pack_details"][pack_id] = pack_details;
+    storeRegistry(registry);
+    logPackManager("Cached pack details pack_id=" + pack_id);
+    return pack_details;
+}
+
+Json::Value PackManager::normalizePackServerDetails(const Json::Value& pack_details) const {
+    const Json::Value capability = pack_details.get("capability", Json::Value(Json::objectValue));
+    const Json::Value package = pack_details.get("package", Json::Value(Json::objectValue));
+    const Json::Value monetization = pack_details.get("monetization", Json::Value(Json::objectValue));
+    const Json::Value runtime = pack_details.get("runtime_descriptor", Json::Value(Json::objectValue));
+
+    Json::Value normalized(Json::objectValue);
+    normalized["pack_id"] = package.get("pack_id", "");
+    normalized["name"] = package.get("pack_name", capability.get("name", ""));
+    normalized["version"] = capability.get("version", package.get("version", ""));
+    normalized["package_url"] = package.get("pack_url", package.get("bundle_path", package.get("bundle_file", "")));
+    const std::string checksum = package.get("checksum", "").asString();
+    normalized["checksum"] = checksum;
+    if (checksum.rfind("md5:", 0) == 0) {
+        normalized["md5"] = checksum.substr(4);
+    } else {
+        normalized["md5"] = "";
+    }
+    normalized["license"] = capability.get("license", "");
+    normalized["intent"] = capability.get("slug", "");
+    normalized["metering_unit"] = monetization.get("model", "usage");
+    normalized["dependencies"] = Json::Value(Json::arrayValue);
+
+    Json::Value device_capability(Json::objectValue);
+    if (runtime.isMember("memory_required_mb")) {
+        device_capability["min_ram_mb"] = runtime["memory_required_mb"];
+    }
+    if (runtime.isMember("cpu_cores_recommended")) {
+        device_capability["min_cpu_cores"] = runtime["cpu_cores_recommended"];
+    }
+    Json::Value accelerators(Json::arrayValue);
+    if (runtime.get("gpu_required", false).asBool()) {
+        accelerators.append("gpu");
+    }
+    device_capability["accelerators"] = accelerators;
+    normalized["device_capability"] = device_capability;
+
+    Json::Value ai_capability(Json::objectValue);
+    ai_capability["task"] = capability.get("slug", "");
+    ai_capability["name"] = capability.get("name", "");
+    ai_capability["description"] = capability.get("description", "");
+    ai_capability["category"] = capability.get("category", "");
+    ai_capability["keywords"] = capability.get("tags", Json::Value(Json::arrayValue));
+    normalized["ai_capability"] = ai_capability;
+
+    Json::Value runtime_dependencies(Json::arrayValue);
+    if (runtime.isMember("dependencies") && runtime["dependencies"].isArray()) {
+        runtime_dependencies = runtime["dependencies"];
+    }
+    normalized["runtime_dependencies"] = runtime_dependencies;
+
+    Json::Value services(Json::arrayValue);
+    if (runtime.isMember("interface")) {
+        services.append(runtime["interface"]);
+    }
+    normalized["services"] = services;
+    normalized["tags"] = capability.get("tags", Json::Value(Json::arrayValue));
+    normalized["pack_description"] = capability.get("description", "");
+    normalized["pack_monetization"] = monetization;
+    normalized["pack_server_details"] = pack_details;
+    return normalized;
 }
 
 Json::Value PackManager::findLocalPackForCapability(const Json::Value& registry,
@@ -549,6 +925,10 @@ bool PackManager::isPackInstalled(const Json::Value& pack_entry) const {
     return status == "Installed" || status == "Enabled" || status == "Loaded" || status == "Unloaded" || status == "Disabled";
 }
 
+bool PackManager::isPackEnabledState(const std::string& state) const {
+    return state == "Enabled" || state == "Loaded" || state == "Unloaded";
+}
+
 bool PackManager::packSupportsCapability(const Json::Value& pack_entry, const std::string& capability) const {
     if (pack_entry.get("intent", "").asString() == capability) {
         return true;
@@ -586,6 +966,11 @@ bool PackManager::capabilityMatches(const Json::Value& required, const Json::Val
             return false;
         }
     }
+    if (required.isMember("min_cpu_cores")) {
+        if (actual.get("cpu_cores", 0).asInt() < required["min_cpu_cores"].asInt()) {
+            return false;
+        }
+    }
     if (required.isMember("os_family")) {
         const auto device_os = actual.get("os_family", "").asString();
         if (required["os_family"].isString() && required["os_family"].asString() != device_os) {
@@ -618,6 +1003,11 @@ void PackManager::publishEvent(const std::string& phase,
     if (!extra.isNull()) {
         event["details"] = extra;
     }
+    logPackManager("Publishing event phase=" + phase +
+                   " status=" + status +
+                   " pack_id=" + pack_id +
+                   " user_id=" + user_id +
+                   (!extra.isNull() ? " details=" + toJsonString(extra) : ""));
     if (sink_) {
         sink_->publish(event);
     }

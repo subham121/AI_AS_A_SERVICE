@@ -26,20 +26,9 @@
   "services": ["activate", "configure", "predict", "deactivate"],
   "tags": ["next-word", "autocomplete", "onnx", "toy", "plugin"],
   "runtime": {
+    "helper": "runtime/next_word_helper.py",
     "model": "model/next_word_bigram.onnx",
     "vocab": "model/vocab.json",
-    "transitions": "model/transitions.json",
-    "backend": "onnxruntime",
-    "fallback_backend": "transition_table",
-    "input_name": "input_token",
-    "output_name": "next_token",
-    "lazy_load": true,
-    "warmup_on_activate": true,
-    "max_concurrent_inferences": 1,
-    "session": {
-      "intra_op_threads": 1,
-      "inter_op_threads": 1,
-      "graph_optimization": "extended"
-    }
+    "transitions": "model/transitions.json"
   }
 }

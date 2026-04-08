@@ -12,12 +12,19 @@ constexpr const char* kBusName = "com.example.EdgeAI";
 constexpr const char* kObjectPath = "/com/example/EdgeAI/Gateway";
 constexpr const char* kInterfaceName = "com.example.EdgeAI.Gateway1";
 
+Json::Value parseJsonOrEmptyObject(const gchar* payload) {
+    if (!payload || std::string(payload).empty()) {
+        return Json::Value(Json::objectValue);
+    }
+    return parseJson(payload);
+}
+
 const gchar* kIntrospectionXml = R"XML(
 <node>
   <interface name="com.example.EdgeAI.Gateway1">
     <method name="HandleUserRequest">
       <arg type="s" name="user_id" direction="in"/>
-      <arg type="s" name="skill" direction="in"/>
+      <arg type="s" name="input" direction="in"/>
       <arg type="s" name="device_capability_json" direction="in"/>
       <arg type="s" name="response_json" direction="out"/>
     </method>
@@ -25,6 +32,12 @@ const gchar* kIntrospectionXml = R"XML(
       <arg type="s" name="user_id" direction="in"/>
       <arg type="s" name="capability" direction="in"/>
       <arg type="s" name="device_capability_json" direction="in"/>
+      <arg type="s" name="response_json" direction="out"/>
+    </method>
+    <method name="UsePack">
+      <arg type="s" name="user_id" direction="in"/>
+      <arg type="s" name="pack_id" direction="in"/>
+      <arg type="b" name="approve_dependencies" direction="in"/>
       <arg type="s" name="response_json" direction="out"/>
     </method>
     <method name="InstallPack">
@@ -87,7 +100,8 @@ const GDBusInterfaceVTable kInterfaceVTable = {
 
 }  // namespace
 
-AIGatewayService::AIGatewayService(PackManager& manager) : manager_(manager) {
+AIGatewayService::AIGatewayService(PackManager& manager, CapabilityRouter& capability_router)
+    : manager_(manager), capability_router_(capability_router) {
     std::cerr << "[AIGatewayService::constructor] Initializing AI Gateway Service" << std::endl;
     manager_.setEventSink(this);
     GError* error = nullptr;
@@ -211,12 +225,14 @@ void AIGatewayService::handleMethodCall(GDBusConnection* /*connection*/,
 Json::Value AIGatewayService::dispatch(const std::string& method, GVariant* parameters) {
     if (method == "HandleUserRequest") {
         const gchar* user_id = nullptr;
-        const gchar* skill = nullptr;
+        const gchar* input = nullptr;
         const gchar* device_json = nullptr;
-        g_variant_get(parameters, "(&s&s&s)", &user_id, &skill, &device_json);
+        g_variant_get(parameters, "(&s&s&s)", &user_id, &input, &device_json);
         std::cerr << "[dispatch::HandleUserRequest] user_id=" << (user_id ? user_id : "(null)")
-                  << " skill=" << (skill ? skill : "(null)") << std::endl;
-        Json::Value response = manager_.handleUserRequest(user_id, skill, parseJson(device_json));
+                  << " input=" << (input ? input : "(null)") << std::endl;
+        Json::Value response = capability_router_.routeUserRequest(user_id ? user_id : "",
+                                                                   input ? input : "",
+                                                                   parseJsonOrEmptyObject(device_json));
         response["user_id"] = user_id;
         return response;
     }
@@ -226,9 +242,20 @@ Json::Value AIGatewayService::dispatch(const std::string& method, GVariant* para
         const gchar* device_json = nullptr;
         g_variant_get(parameters, "(&s&s&s)", &user_id, &capability, &device_json);
         std::cerr << "[dispatch::QueryPacks] user_id=" << (user_id ? user_id : "(null)") << " capability=" << (capability ? capability : "(null)") << std::endl;
-        Json::Value response = manager_.queryPacks(capability, parseJson(device_json));
+        Json::Value response = capability_router_.queryCompatiblePacks(capability ? capability : "",
+                                                                       parseJsonOrEmptyObject(device_json));
         response["user_id"] = user_id;
         return response;
+    }
+    if (method == "UsePack") {
+        const gchar* user_id = nullptr;
+        const gchar* pack_id = nullptr;
+        gboolean approve = FALSE;
+        g_variant_get(parameters, "(&s&sb)", &user_id, &pack_id, &approve);
+        std::cerr << "[dispatch::UsePack] user_id=" << (user_id ? user_id : "(null)")
+                  << " pack_id=" << (pack_id ? pack_id : "(null)")
+                  << " approve=" << approve << std::endl;
+        return capability_router_.usePack(user_id ? user_id : "", pack_id ? pack_id : "", approve);
     }
     if (method == "InstallPack") {
         const gchar* user_id = nullptr;
@@ -259,7 +286,10 @@ Json::Value AIGatewayService::dispatch(const std::string& method, GVariant* para
         const gchar* options_json = nullptr;
         g_variant_get(parameters, "(&s&s&s&s)", &user_id, &pack_id, &prompt, &options_json);
         std::cerr << "[dispatch::Invoke] user_id=" << (user_id ? user_id : "(null)") << " pack_id=" << (pack_id ? pack_id : "(null)") << " prompt=" << (prompt ? prompt : "(null)") << std::endl;
-        return manager_.invoke(user_id, pack_id, prompt, options_json);
+        return capability_router_.invoke(user_id ? user_id : "",
+                                         pack_id ? pack_id : "",
+                                         prompt ? prompt : "",
+                                         options_json ? options_json : "{}");
     }
     if (method == "UnloadPack") {
         const gchar* user_id = nullptr;

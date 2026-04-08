@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
-import os
+import logging
 import sqlite3
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
@@ -13,12 +13,16 @@ from flask import Flask, jsonify, request
 
 ROOT = Path(__file__).resolve().parent.parent
 DB_PATH = ROOT / "catalog_service" / "data" / "packs.db"
-SEED_PATH = ROOT / "catalog_service" / "data" / "seed_packs.json"
+CAPABILITY_MANIFEST_PATH = ROOT / "capability_metadata.json"
+PACK_SERVER_BASE_URL = "http://10.221.31.77:5000"
+API_PREFIX = "/apiv1"
 
+logging.basicConfig(level=logging.INFO, format="[CatalogService] %(message)s")
 app = Flask(__name__)
 
 
 def connect_db() -> sqlite3.Connection:
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
@@ -26,24 +30,19 @@ def connect_db() -> sqlite3.Connection:
 
 def ensure_schema() -> None:
     conn = connect_db()
+    conn.execute("DROP TABLE IF EXISTS packs")
     conn.execute(
         """
-        CREATE TABLE IF NOT EXISTS packs (
+        CREATE TABLE packs (
             pack_id TEXT PRIMARY KEY,
-            name TEXT NOT NULL,
-            version TEXT NOT NULL,
-            package_relpath TEXT NOT NULL,
-            manifest_relpath TEXT NOT NULL,
-            package_url TEXT,
-            md5 TEXT,
-            license TEXT,
-            intent TEXT NOT NULL,
-            metering_unit TEXT NOT NULL,
-            dependencies_json TEXT NOT NULL,
+            capability_slug TEXT NOT NULL,
+            capability_name TEXT NOT NULL,
+            pack_name TEXT NOT NULL,
+            pack_url TEXT NOT NULL,
+            pack_description TEXT NOT NULL,
+            pack_monetization_json TEXT NOT NULL,
             device_capability_json TEXT NOT NULL,
-            ai_capability_json TEXT NOT NULL,
-            services_json TEXT NOT NULL,
-            tags_json TEXT NOT NULL
+            capability_json TEXT NOT NULL
         )
         """
     )
@@ -51,111 +50,8 @@ def ensure_schema() -> None:
     conn.close()
 
 
-def compute_md5(path: Path) -> str | None:
-    if not path.exists():
-        return None
-    digest = hashlib.md5()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(8192), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def as_file_url(path: Path) -> str:
-    return path.resolve().as_uri()
-
-
-def load_seed() -> list[dict[str, Any]]:
-    return json.loads(SEED_PATH.read_text())
-
-
-def reindex() -> dict[str, Any]:
-    ensure_schema()
-    packs = load_seed()
-    conn = connect_db()
-    for pack in packs:
-        package_path = ROOT / pack["package_relpath"]
-        manifest_path = ROOT / pack["manifest_relpath"]
-        md5 = compute_md5(package_path)
-        package_url = as_file_url(package_path)
-        conn.execute(
-            """
-            INSERT INTO packs (
-                pack_id, name, version, package_relpath, manifest_relpath, package_url, md5, license,
-                intent, metering_unit, dependencies_json, device_capability_json,
-                ai_capability_json, services_json, tags_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(pack_id) DO UPDATE SET
-                name=excluded.name,
-                version=excluded.version,
-                package_relpath=excluded.package_relpath,
-                manifest_relpath=excluded.manifest_relpath,
-                package_url=excluded.package_url,
-                md5=excluded.md5,
-                license=excluded.license,
-                intent=excluded.intent,
-                metering_unit=excluded.metering_unit,
-                dependencies_json=excluded.dependencies_json,
-                device_capability_json=excluded.device_capability_json,
-                ai_capability_json=excluded.ai_capability_json,
-                services_json=excluded.services_json,
-                tags_json=excluded.tags_json
-            """,
-            (
-                pack["pack_id"],
-                pack["name"],
-                pack["version"],
-                pack["package_relpath"],
-                pack["manifest_relpath"],
-                package_url,
-                md5,
-                pack["license"],
-                pack["intent"],
-                pack["metering_unit"],
-                json.dumps(pack["dependencies"]),
-                json.dumps(pack["device_capability"]),
-                json.dumps(pack["ai_capability"]),
-                json.dumps(pack["services"]),
-                json.dumps(pack["tags"]),
-            ),
-        )
-    conn.commit()
-    conn.close()
-    return {"status": "ok", "indexed": len(packs)}
-
-
-def row_to_pack(row: sqlite3.Row) -> dict[str, Any]:
-    return {
-        "pack_id": row["pack_id"],
-        "name": row["name"],
-        "version": row["version"],
-        "package_url": row["package_url"],
-        "md5": row["md5"],
-        "license": row["license"],
-        "intent": row["intent"],
-        "metering_unit": row["metering_unit"],
-        "dependencies": json.loads(row["dependencies_json"]),
-        "device_capability": json.loads(row["device_capability_json"]),
-        "ai_capability": json.loads(row["ai_capability_json"]),
-        "services": json.loads(row["services_json"]),
-        "tags": json.loads(row["tags_json"]),
-        "manifest_path": str((ROOT / row["manifest_relpath"]).resolve()),
-    }
-
-
-def collect_capability_aliases(pack: dict[str, Any]) -> list[str]:
-    aliases = {pack["intent"]}
-    for tag in pack.get("tags", []):
-        aliases.add(tag)
-    ai_capability = pack.get("ai_capability", {})
-    if isinstance(ai_capability, dict):
-        task = ai_capability.get("task")
-        if isinstance(task, str):
-            aliases.add(task)
-        for keyword in ai_capability.get("keywords", []):
-            if isinstance(keyword, str):
-                aliases.add(keyword)
-    return sorted(aliases)
+def load_manifest() -> dict[str, Any]:
+    return json.loads(CAPABILITY_MANIFEST_PATH.read_text())
 
 
 def normalize_text(text: str) -> str:
@@ -186,6 +82,96 @@ def identify_capability_from_skill(skill: str, capability_list: list[str]) -> st
     return ranked[0][2]
 
 
+def derive_pack_url(package: dict[str, Any]) -> str:
+    pack_url = package.get("pack_url") or package.get("bundle_path")
+    if isinstance(pack_url, str) and pack_url:
+        return pack_url
+    bundle_file = package.get("bundle_file", "")
+    if not bundle_file:
+        return ""
+    return f"{PACK_SERVER_BASE_URL.rstrip('/')}/bundles/{bundle_file}"
+
+
+def derive_device_capability(entry: dict[str, Any]) -> dict[str, Any]:
+    runtime = entry.get("runtime_descriptor", {})
+    device_capability: dict[str, Any] = {
+        "accelerators": [],
+    }
+    memory_required = runtime.get("memory_required_mb")
+    if isinstance(memory_required, int):
+        device_capability["min_ram_mb"] = memory_required
+    cpu_cores = runtime.get("cpu_cores_recommended")
+    if isinstance(cpu_cores, int):
+        device_capability["min_cpu_cores"] = cpu_cores
+    if runtime.get("gpu_required") is True:
+        device_capability["accelerators"] = ["gpu"]
+    return device_capability
+
+
+def normalize_manifest_entry(entry: dict[str, Any]) -> dict[str, Any]:
+    normalized = deepcopy(entry)
+    capability = normalized.get("capability", {})
+    package = normalized.setdefault("package", {})
+    package["pack_url"] = derive_pack_url(package)
+    normalized["device_capability"] = derive_device_capability(normalized)
+    return {
+        "pack_id": package.get("pack_id", ""),
+        "capability_slug": capability.get("slug", ""),
+        "capability_name": capability.get("name", ""),
+        "pack_name": package.get("pack_name", capability.get("name", "")),
+        "pack_url": package.get("pack_url", ""),
+        "pack_description": capability.get("description", ""),
+        "pack_monetization": normalized.get("monetization", {}),
+        "device_capability": normalized.get("device_capability", {}),
+        "capability_json": normalized,
+    }
+
+
+def reindex() -> dict[str, Any]:
+    ensure_schema()
+    manifest = load_manifest()
+    packs = [normalize_manifest_entry(entry) for entry in manifest.get("capabilities", [])]
+    conn = connect_db()
+    for pack in packs:
+        conn.execute(
+            """
+            INSERT INTO packs (
+                pack_id, capability_slug, capability_name, pack_name, pack_url,
+                pack_description, pack_monetization_json, device_capability_json, capability_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                pack["pack_id"],
+                pack["capability_slug"],
+                pack["capability_name"],
+                pack["pack_name"],
+                pack["pack_url"],
+                pack["pack_description"],
+                json.dumps(pack["pack_monetization"]),
+                json.dumps(pack["device_capability"]),
+                json.dumps(pack["capability_json"]),
+            ),
+        )
+    conn.commit()
+    conn.close()
+    app.logger.info("Indexed %s capability-pack entries from %s", len(packs), CAPABILITY_MANIFEST_PATH)
+    return {"status": "ok", "indexed": len(packs)}
+
+
+def row_to_summary(row: sqlite3.Row) -> dict[str, Any]:
+    return {
+        "pack_id": row["pack_id"],
+        "pack_name": row["pack_name"],
+        "pack_url": row["pack_url"],
+        "pack_description": row["pack_description"],
+        "pack_monetization": json.loads(row["pack_monetization_json"]),
+    }
+
+
+def row_to_capability_json(row: sqlite3.Row) -> dict[str, Any]:
+    return json.loads(row["capability_json"])
+
+
 def capability_matches(required: dict[str, Any], actual: dict[str, Any]) -> bool:
     architecture = required.get("architecture")
     if isinstance(architecture, list) and actual.get("architecture") not in architecture:
@@ -193,6 +179,8 @@ def capability_matches(required: dict[str, Any], actual: dict[str, Any]) -> bool
     if isinstance(architecture, str) and actual.get("architecture") != architecture:
         return False
     if actual.get("ram_mb", 0) < required.get("min_ram_mb", 0):
+        return False
+    if actual.get("cpu_cores", 0) < required.get("min_cpu_cores", 0):
         return False
     os_family = required.get("os_family")
     if isinstance(os_family, list) and actual.get("os_family") not in os_family:
@@ -205,20 +193,79 @@ def capability_matches(required: dict[str, Any], actual: dict[str, Any]) -> bool
     return True
 
 
+def parse_device_capability_arg(value: str | None) -> dict[str, Any]:
+    if not value:
+        return {}
+    parsed = json.loads(value)
+    return parsed if isinstance(parsed, dict) else {}
+
+
+@app.before_request
+def log_request() -> None:
+    payload = request.get_data(as_text=True)
+    app.logger.info("Request %s %s args=%s body=%s", request.method, request.path, dict(request.args), payload or "{}")
+
+
+@app.after_request
+def log_response(response):
+    app.logger.info("Response %s %s status=%s", request.method, request.path, response.status_code)
+    return response
+
+
 @app.get("/healthz")
 def healthz():
     return jsonify({"status": "ok"})
 
 
-@app.get("/capabilities")
-def get_capabilities():
+@app.get(f"{API_PREFIX}/getCapabilityList")
+def get_capability_list():
     conn = connect_db()
-    rows = conn.execute("SELECT * FROM packs").fetchall()
+    rows = conn.execute("SELECT capability_slug FROM packs ORDER BY capability_slug ASC").fetchall()
     conn.close()
-    capabilities: set[str] = set()
+    capabilities = [row["capability_slug"] for row in rows]
+    return jsonify({"capabilities": capabilities, "count": len(capabilities)})
+
+
+@app.get(f"{API_PREFIX}/getCompatiblePackList")
+def get_compatible_pack_list():
+    capability = request.args.get("capability", "")
+    device_capability = parse_device_capability_arg(request.args.get("device_capability"))
+
+    conn = connect_db()
+    rows = conn.execute(
+        "SELECT pack_id, pack_name, pack_url, pack_description, pack_monetization_json, device_capability_json, capability_slug "
+        "FROM packs ORDER BY pack_name ASC"
+    ).fetchall()
+    conn.close()
+
+    compatible: list[dict[str, Any]] = []
     for row in rows:
-        capabilities.update(collect_capability_aliases(row_to_pack(row)))
-    return jsonify({"capabilities": sorted(capabilities), "count": len(capabilities)})
+        if capability and row["capability_slug"] != capability:
+            continue
+        required = json.loads(row["device_capability_json"])
+        if capability_matches(required, device_capability):
+            compatible.append(row_to_summary(row))
+
+    return jsonify({"capability": capability, "packs": compatible, "count": len(compatible)})
+
+
+@app.get(f"{API_PREFIX}/getPackDetails")
+def get_pack_details():
+    pack_id = request.args.get("pack_id", "")
+    if not pack_id:
+        return jsonify({"status": "error", "message": "pack_id is required"}), 400
+
+    conn = connect_db()
+    row = conn.execute("SELECT capability_json FROM packs WHERE pack_id = ?", (pack_id,)).fetchone()
+    conn.close()
+    if row is None:
+        return jsonify({"status": "error", "message": "pack not found"}), 404
+    return jsonify(row_to_capability_json(row))
+
+
+@app.get("/capabilities")
+def get_capabilities_legacy():
+    return get_capability_list()
 
 
 @app.post("/capabilities/identify")
@@ -228,12 +275,9 @@ def identify_capability():
     capability_list = payload.get("capability_list")
     if not isinstance(capability_list, list):
         conn = connect_db()
-        rows = conn.execute("SELECT * FROM packs").fetchall()
+        rows = conn.execute("SELECT capability_slug FROM packs ORDER BY capability_slug ASC").fetchall()
         conn.close()
-        capability_set: set[str] = set()
-        for row in rows:
-            capability_set.update(collect_capability_aliases(row_to_pack(row)))
-        capability_list = sorted(capability_set)
+        capability_list = [row["capability_slug"] for row in rows]
     capability = identify_capability_from_skill(skill, capability_list)
     if capability is None:
         return jsonify({"status": "error", "message": "capability not identified"}), 404
@@ -248,38 +292,42 @@ def reindex_endpoint():
 @app.get("/packs/<pack_id>")
 def get_pack(pack_id: str):
     conn = connect_db()
-    row = conn.execute("SELECT * FROM packs WHERE pack_id = ?", (pack_id,)).fetchone()
+    row = conn.execute("SELECT capability_json FROM packs WHERE pack_id = ?", (pack_id,)).fetchone()
     conn.close()
     if row is None:
         return jsonify({"status": "error", "message": "pack not found"}), 404
-    return jsonify(row_to_pack(row))
+    return jsonify(row_to_capability_json(row))
 
 
 @app.post("/packs/query")
-def query_packs():
+def query_packs_legacy():
     payload = request.get_json(force=True)
-    capability = payload.get("capability") or payload.get("intent")
-    device = payload["device_capability"]
+    capability = payload.get("capability") or payload.get("intent") or ""
+    device_capability = payload.get("device_capability", {})
+
     conn = connect_db()
-    rows = conn.execute("SELECT * FROM packs").fetchall()
+    rows = conn.execute(
+        "SELECT pack_id, pack_name, pack_url, pack_description, pack_monetization_json, device_capability_json, capability_slug "
+        "FROM packs ORDER BY pack_name ASC"
+    ).fetchall()
     conn.close()
 
-    compatible = []
+    compatible: list[dict[str, Any]] = []
     for row in rows:
-        pack = row_to_pack(row)
-        if capability and capability not in collect_capability_aliases(pack):
+        if capability and row["capability_slug"] != capability:
             continue
-        if capability_matches(pack["device_capability"], device):
-            compatible.append(pack)
-    return jsonify({"packs": compatible, "count": len(compatible)})
+        required = json.loads(row["device_capability_json"])
+        if capability_matches(required, device_capability):
+            compatible.append(row_to_summary(row))
+
+    return jsonify({"capability": capability, "packs": compatible, "count": len(compatible)})
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run the Catalog Service")
-    parser.add_argument("--host", default="127.0.0.1", help="Host IP address to bind to (default: 127.0.0.1)")
-    parser.add_argument("--port", type=int, default=5001, help="Port to bind to (default: 5001)")
+    parser.add_argument("--host", default="0.0.0.0", help="Host IP address to bind to (default: 0.0.0.0)")
+    parser.add_argument("--port", type=int, default=5000, help="Port to bind to (default: 5000)")
     args = parser.parse_args()
 
-    ensure_schema()
     reindex()
     app.run(host=args.host, port=args.port, debug=False)

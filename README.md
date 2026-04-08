@@ -12,7 +12,7 @@ This workspace now contains a runnable scaffold for an on-edge AI service with:
 - `src/edge_gateway`: C++ DBus daemon, AI Gateway, and PackManager.
 - `include/edgeai`: Shared headers, plugin ABI, and interfaces.
 - `catalog_service`: Python Flask service with an SQLite-backed pack index.
-- `packs/next_word`: Sample next-word plugin pack, manifest, ONNX helper, and model assets.
+- `packs/next_word`: Sample next-word plugin pack, manifest, Python helper runtime, and model assets.
 - `artifacts`: Generated pack bundle tarball after building.
 - `var`: Local state, staging, and installed pack roots used by the sample daemon.
 
@@ -28,8 +28,9 @@ The AI Gateway is exposed over DBus at:
 
 Supported methods:
 
-- `HandleUserRequest(userId, skill, deviceCapabilityJson)`
+- `HandleUserRequest(userId, input, deviceCapabilityJson)`
 - `QueryPacks(userId, capability, deviceCapabilityJson)`
+- `UsePack(userId, packId, approveDependencies)`
 - `InstallPack(userId, packId, approveDependencies)`
 - `EnablePack(userId, packId)`
 - `LoadPack(userId, packId)`
@@ -45,14 +46,15 @@ The service also emits a `PackStateChanged` signal with a JSON payload when the 
 
 The sample PackManager implements the lifecycle expressed in your PlantUML:
 
-1. Refresh the capability list from the catalog service.
-2. Identify the requested capability from the external app skill text.
-3. Check for a compatible local pack before querying cloud packs.
-4. Download the selected pack into staging and verify it by MD5.
-5. Resolve dependencies and install the bundle through an `opkg`-shaped adapter.
-6. Register state in the pack registry.
-7. Enable, load, invoke, unload, disable, and uninstall packs according to registry state.
-8. Validate ABI compatibility before activation.
+1. Refresh the capability list from the catalog service during initialization and cache it in the registry.
+2. Let the `CapabilityRouter` use the `IntentManager` to derive a skill from the user input.
+3. Normalize the skill to a known capability and check local matching packs before querying cloud packs.
+4. Ask the device capability provider for edge-device capabilities when cloud matching is required.
+5. Download the selected pack into staging and verify it by MD5.
+6. Resolve dependencies and install the bundle through an `opkg`-shaped adapter.
+7. Register state in the pack registry.
+8. Enable, load, invoke, unload, disable, and uninstall packs according to registry state.
+9. Validate ABI compatibility before activation.
 
 State is persisted in:
 
@@ -61,26 +63,21 @@ State is persisted in:
 
 ### Catalog Service
 
-The catalog service keeps an SQLite index of:
+The catalog service keeps an SQLite index derived from `capability_metadata.json` and stores:
 
-- Pack URL
-- MD5 checksum
-- Device capability requirements
-- AI capability metadata
-- Dependencies
-- Version
-- License
-- Intent
-- Tags
-- Metering unit
+- Capability slug
+- Pack ID and pack name
+- Pack URL / bundle path
+- Pack description
+- Pack monetization metadata
+- Derived device capability requirements
+- Full raw pack capability JSON
 
 It exposes:
 
-- `GET /healthz`
-- `GET /capabilities`
-- `POST /capabilities/identify`
-- `GET /packs/<pack_id>`
-- `POST /packs/query`
+- `GET /apiv1/getCapabilityList`
+- `GET /apiv1/getCompatiblePackList`
+- `GET /apiv1/getPackDetails`
 - `POST /packs/reindex`
 
 ## Building
@@ -99,13 +96,13 @@ This builds:
 
 ## Running the Catalog Service
 
-Use Python 3.10+ if you want ONNX-backed inference in the sample helper:
+Use Python 3.10+ for the catalog service and the sample pack helper:
 
 ```bash
 /opt/homebrew/bin/python3.10 -m venv .venv
 source .venv/bin/activate
 pip install -r catalog_service/requirements.txt
-python catalog_service/app.py --host 192.168.1.100
+python catalog_service/app.py --host 0.0.0.0 --port 5000
 ```
 
 ## Running the Edge Daemon
@@ -134,9 +131,8 @@ The sample pack:
 
 - Exports a stable C ABI defined in `include/edgeai/pack_abi.h`
 - Loads metadata from `packs/next_word/manifest.json`
-- Uses the ONNX Runtime C++ API to keep model loading and inference in-process
-- Reuses a persisted session with lazy-load, warm-up, and declared model I/O contract checks
-- Falls back to the embedded transition table when the pack is configured for `auto` backend selection and ONNX inference fails
+- Uses a Python helper script to run model inference out of process
+- Falls back to the embedded transition table when ONNX inference is unavailable or the pack is configured away from ONNX
 
 ## Notes
 

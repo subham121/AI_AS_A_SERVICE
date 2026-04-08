@@ -1,8 +1,5 @@
 {
   "backend": "auto",
   "max_tokens": 1,
-  "unknown_token": "world",
-  "intra_op_threads": 1,
-  "inter_op_threads": 1,
-  "graph_optimization": "extended"
+  "unknown_token": "world"
 }
