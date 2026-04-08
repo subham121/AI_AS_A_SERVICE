@@ -8,7 +8,7 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
-from flask import Flask, jsonify, request
+from flask import Flask, abort, jsonify, request, send_file
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -16,6 +16,8 @@ DB_PATH = ROOT / "catalog_service" / "data" / "packs.db"
 CAPABILITY_MANIFEST_PATH = ROOT / "capability_metadata.json"
 PACK_SERVER_BASE_URL = "http://10.221.31.77:5000"
 API_PREFIX = "/apiv1"
+BUNDLE_DIR = ROOT / "catalog_service" / "bundles"
+ARTIFACT_DIR = ROOT / "artifacts"
 
 logging.basicConfig(level=logging.INFO, format="[CatalogService] %(message)s")
 app = Flask(__name__)
@@ -38,6 +40,7 @@ def ensure_schema() -> None:
             capability_slug TEXT NOT NULL,
             capability_name TEXT NOT NULL,
             pack_name TEXT NOT NULL,
+            bundle_file TEXT NOT NULL,
             pack_url TEXT NOT NULL,
             pack_description TEXT NOT NULL,
             pack_monetization_json TEXT NOT NULL,
@@ -83,16 +86,27 @@ def identify_capability_from_skill(skill: str, capability_list: list[str]) -> st
 
 
 def derive_pack_url(package: dict[str, Any]) -> str:
-    pack_url = package.get("pack_url") or package.get("bundle_path")
-    if isinstance(pack_url, str) and pack_url:
-        return pack_url
     bundle_file = package.get("bundle_file", "")
     if not bundle_file:
-        return ""
+        pack_url = package.get("pack_url") or package.get("bundle_path")
+        return pack_url if isinstance(pack_url, str) else ""
     return f"{PACK_SERVER_BASE_URL.rstrip('/')}/bundles/{bundle_file}"
 
 
+def resolve_bundle_path(bundle_file: str) -> Path | None:
+    if not bundle_file:
+        return None
+    for base_dir in (BUNDLE_DIR, ARTIFACT_DIR):
+        candidate = base_dir / bundle_file
+        if candidate.exists():
+            return candidate
+    return None
+
+
 def derive_device_capability(entry: dict[str, Any]) -> dict[str, Any]:
+    explicit = entry.get("device_capability")
+    if isinstance(explicit, dict) and explicit:
+        return deepcopy(explicit)
     runtime = entry.get("runtime_descriptor", {})
     device_capability: dict[str, Any] = {
         "accelerators": [],
@@ -119,6 +133,7 @@ def normalize_manifest_entry(entry: dict[str, Any]) -> dict[str, Any]:
         "capability_slug": capability.get("slug", ""),
         "capability_name": capability.get("name", ""),
         "pack_name": package.get("pack_name", capability.get("name", "")),
+        "bundle_file": package.get("bundle_file", ""),
         "pack_url": package.get("pack_url", ""),
         "pack_description": capability.get("description", ""),
         "pack_monetization": normalized.get("monetization", {}),
@@ -136,15 +151,16 @@ def reindex() -> dict[str, Any]:
         conn.execute(
             """
             INSERT INTO packs (
-                pack_id, capability_slug, capability_name, pack_name, pack_url,
+                pack_id, capability_slug, capability_name, pack_name, bundle_file, pack_url,
                 pack_description, pack_monetization_json, device_capability_json, capability_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 pack["pack_id"],
                 pack["capability_slug"],
                 pack["capability_name"],
                 pack["pack_name"],
+                pack["bundle_file"],
                 pack["pack_url"],
                 pack["pack_description"],
                 json.dumps(pack["pack_monetization"]),
@@ -162,6 +178,7 @@ def row_to_summary(row: sqlite3.Row) -> dict[str, Any]:
     return {
         "pack_id": row["pack_id"],
         "pack_name": row["pack_name"],
+        "bundle_file": row["bundle_file"],
         "pack_url": row["pack_url"],
         "pack_description": row["pack_description"],
         "pack_monetization": json.loads(row["pack_monetization_json"]),
@@ -217,6 +234,14 @@ def healthz():
     return jsonify({"status": "ok"})
 
 
+@app.get("/bundles/<path:bundle_file>")
+def get_bundle(bundle_file: str):
+    bundle_path = resolve_bundle_path(bundle_file)
+    if bundle_path is None:
+        abort(404)
+    return send_file(bundle_path, as_attachment=True, download_name=bundle_path.name)
+
+
 @app.get(f"{API_PREFIX}/getCapabilityList")
 def get_capability_list():
     conn = connect_db()
@@ -233,7 +258,7 @@ def get_compatible_pack_list():
 
     conn = connect_db()
     rows = conn.execute(
-        "SELECT pack_id, pack_name, pack_url, pack_description, pack_monetization_json, device_capability_json, capability_slug "
+        "SELECT pack_id, pack_name, bundle_file, pack_url, pack_description, pack_monetization_json, device_capability_json, capability_slug "
         "FROM packs ORDER BY pack_name ASC"
     ).fetchall()
     conn.close()
@@ -307,7 +332,7 @@ def query_packs_legacy():
 
     conn = connect_db()
     rows = conn.execute(
-        "SELECT pack_id, pack_name, pack_url, pack_description, pack_monetization_json, device_capability_json, capability_slug "
+        "SELECT pack_id, pack_name, bundle_file, pack_url, pack_description, pack_monetization_json, device_capability_json, capability_slug "
         "FROM packs ORDER BY pack_name ASC"
     ).fetchall()
     conn.close()

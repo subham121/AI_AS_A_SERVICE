@@ -345,8 +345,31 @@ Json::Value PackManager::queryPacks(const std::string& capability, const Json::V
                             "&device_capability=" + http_client_.urlEncode(toJsonString(actual_device_capability));
     logPackManager("Querying compatible packs capability=" + capability +
                    " device_capability=" + toJsonString(actual_device_capability));
-    const Json::Value response = http_client_.getJson(url);
+    Json::Value response = http_client_.getJson(url);
     cacheCompatiblePackList(capability, actual_device_capability, response);
+
+    Json::Value details_by_pack(Json::objectValue);
+    const Json::Value packs = response.get("packs", Json::Value(Json::arrayValue));
+    for (const auto& pack : packs) {
+        if (!pack.isObject() || !pack.isMember("pack_id")) {
+            continue;
+        }
+        const std::string pack_id = pack["pack_id"].asString();
+        try {
+            details_by_pack[pack_id] = fetchPackMetadata(pack_id);
+        } catch (const std::exception& ex) {
+            Json::Value error(Json::objectValue);
+            error["status"] = "error";
+            error["message"] = ex.what();
+            details_by_pack[pack_id] = error;
+            logPackManager("Failed to prefetch pack details pack_id=" + pack_id + " error=" + ex.what());
+        }
+    }
+    response["pack_details"] = details_by_pack;
+    response["details_cached_count"] = details_by_pack.size();
+    logPackManager("Compatible pack query completed capability=" + capability +
+                   " summaries=" + std::to_string(packs.size()) +
+                   " details_cached=" + std::to_string(details_by_pack.size()));
     return response;
 }
 

@@ -184,13 +184,9 @@ Json::Value CapabilityRouter::routeUserRequest(const std::string& user_id,
 Json::Value CapabilityRouter::queryCompatiblePacks(const std::string& capability,
                                                    const Json::Value& device_capability_override) const {
     const Json::Value device_capability = capability_provider_.getDeviceCapability(device_capability_override);
-    const std::string url = catalog_url_ + "/getCompatiblePackList?capability=" + http_client_.urlEncode(capability) +
-                            "&device_capability=" + http_client_.urlEncode(toJsonString(device_capability));
     logRouter("Querying compatible packs capability=" + capability +
               " device_capability=" + toJsonString(device_capability));
-    const Json::Value response = http_client_.getJson(url);
-    manager_.cacheCompatiblePackList(capability, device_capability, response);
-    return response;
+    return manager_.queryPacks(capability, device_capability);
 }
 
 Json::Value CapabilityRouter::usePack(const std::string& user_id, const std::string& pack_id, bool approve_dependencies) {

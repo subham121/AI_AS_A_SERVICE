@@ -91,6 +91,7 @@ set_target_properties(next_word_pack PROPERTIES
 
 set(NEXT_WORD_BUNDLE_DIR ${CMAKE_BINARY_DIR}/packs/next_word/bundle)
 set(NEXT_WORD_ARTIFACT ${PROJECT_SOURCE_DIR}/artifacts/next_word_pack.tar.gz)
+set(NEXT_WORD_CATALOG_BUNDLE_DIR ${PROJECT_SOURCE_DIR}/catalog_service/bundles)
 
 add_custom_command(
     TARGET next_word_pack
@@ -101,6 +102,7 @@ add_custom_command(
     COMMAND ${CMAKE_COMMAND} -E make_directory ${NEXT_WORD_BUNDLE_DIR}/model
     COMMAND ${CMAKE_COMMAND} -E make_directory ${NEXT_WORD_BUNDLE_DIR}/config
     COMMAND ${CMAKE_COMMAND} -E make_directory ${PROJECT_SOURCE_DIR}/artifacts
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${NEXT_WORD_CATALOG_BUNDLE_DIR}
     COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:next_word_pack> ${NEXT_WORD_BUNDLE_DIR}/lib/
     COMMAND ${CMAKE_COMMAND} -E copy ${PROJECT_SOURCE_DIR}/packs/next_word/manifest.json ${NEXT_WORD_BUNDLE_DIR}/
     COMMAND ${CMAKE_COMMAND} -E copy ${PROJECT_SOURCE_DIR}/packs/next_word/runtime/next_word_helper.py ${NEXT_WORD_BUNDLE_DIR}/runtime/
@@ -109,6 +111,7 @@ add_custom_command(
     COMMAND ${CMAKE_COMMAND} -E copy ${PROJECT_SOURCE_DIR}/packs/next_word/model/transitions.json ${NEXT_WORD_BUNDLE_DIR}/model/
     COMMAND ${CMAKE_COMMAND} -E copy ${PROJECT_SOURCE_DIR}/packs/next_word/config/default.json ${NEXT_WORD_BUNDLE_DIR}/config/
     COMMAND ${CMAKE_COMMAND} -E chdir ${NEXT_WORD_BUNDLE_DIR} ${CMAKE_COMMAND} -E tar cfvz ${NEXT_WORD_ARTIFACT} --format=gnutar manifest.json lib runtime model config
+    COMMAND ${CMAKE_COMMAND} -E copy ${NEXT_WORD_ARTIFACT} ${NEXT_WORD_CATALOG_BUNDLE_DIR}/next_word_pack.tar.gz
 )
 
 add_custom_target(pack_artifacts ALL DEPENDS next_word_pack)

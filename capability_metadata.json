@@ -388,6 +388,90 @@
     },
     {
       "capability": {
+        "id": "cap-next-word-001",
+        "name": "Next Word Prediction",
+        "slug": "next_word_prediction",
+        "description": "Predicts the next likely word for a short English prompt using a compact ONNX model pack.",
+        "category": "Natural Language Processing",
+        "tags": ["next word", "word prediction", "autocomplete", "AI"],
+        "state": "active",
+        "visibility": "public",
+        "version": "1.0.0",
+        "min_engine_version": "2.0.0",
+        "created_at": "2026-04-08T00:00:00Z",
+        "updated_at": "2026-04-08T00:00:00Z",
+        "deprecated": false,
+        "deprecation_notice": null
+      },
+      "package": {
+        "pack_id": "next_word_pack",
+        "pack_name": "Next Word Predictor",
+        "pack_slug": "next-word-predictor",
+        "pack_type": "experience_pack",
+        "bundle_file": "next_word_pack.tar.gz",
+        "checksum": "md5:8003d73e94062f5c3c3aba42a2ecd4df",
+        "size_bytes": 188416,
+        "size_human": "184 KB"
+      },
+      "owner": {
+        "owner_id": "org-edgeai-labs",
+        "owner_name": "Edge AI Labs",
+        "owner_type": "organization",
+        "contact_email": "support@edgeai.local",
+        "support_url": "http://10.221.31.77:5000/support/next-word",
+        "documentation_url": "http://10.221.31.77:5000/docs/next-word",
+        "verified": true,
+        "trust_level": "silver",
+        "publisher_since": "2026-04-08T00:00:00Z"
+      },
+      "monetization": {
+        "model": "pay-per-use",
+        "currency": "USD",
+        "pricing_tiers": [
+          {
+            "tier": "usage",
+            "label": "Per Prediction",
+            "cost": 0.001,
+            "description": "Charged for each next-word prediction call."
+          }
+        ],
+        "subscription_plans": []
+      },
+      "device_capability": {
+        "architecture": ["arm64", "x86_64"],
+        "min_ram_mb": 128,
+        "os_family": ["linux", "darwin"],
+        "accelerators": []
+      },
+      "runtime_descriptor": {
+        "runtime_env": "C++/Python",
+        "runtime_version": "C++17 + Python 3.10+",
+        "execution_mode": "local-only",
+        "memory_required_mb": 128,
+        "gpu_required": false,
+        "cpu_cores_recommended": 1,
+        "supports_streaming": false,
+        "supports_batch": false,
+        "interface": "INextWordPredictionService",
+        "entry_point": "next_word_pack",
+        "dependencies": [
+          {
+            "name": "onnxruntime",
+            "version": "1.18.1",
+            "type": "optional",
+            "url": "https://onnxruntime.ai/"
+          },
+          {
+            "name": "numpy",
+            "version": "1.26.4",
+            "type": "optional",
+            "url": "https://numpy.org/"
+          }
+        ]
+      }
+    },
+    {
+      "capability": {
         "id": "cap-tts-google-001",
         "name": "Google Text-to-Speech",
         "slug": "tts_google",
