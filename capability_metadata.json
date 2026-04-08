@@ -1,0 +1,462 @@
+{
+  "capability_index_version": "1.0.0",
+  "generated_at": "2026-04-07T04:30:00Z",
+  "server": {
+    "host": "10.221.31.77",
+    "type": "Apache",
+    "environment": "development",
+    "base_url": "http://10.221.31.77"
+  },
+  "capabilities": [
+    {
+      "capability": {
+        "id": "cap-nlp-basic-001",
+        "name": "Basic NLP",
+        "slug": "nlp_basic",
+        "description": "Basic Natural Language Processing functionalities including tokenization and entity recognition.",
+        "category": "Natural Language Processing",
+        "tags": ["NLP", "tokenization", "entity recognition", "AI"],
+        "state": "active",
+        "visibility": "public",
+        "version": "1.0.0",
+        "min_engine_version": "2.0.0",
+        "created_at": "2026-03-01T08:00:00Z",
+        "updated_at": "2026-04-01T10:30:00Z",
+        "deprecated": false,
+        "deprecation_notice": null
+      },
+      "package": {
+        "pack_id": "aipack.nlp.basic",
+        "pack_name": "Basic NLP Pack",
+        "pack_slug": "nlp-basic",
+        "pack_type": "experience_pack",
+        "bundle_file": "aipack.nlp.basic-1.0.0.pack",
+        "checksum": "sha256:3e6f4a5d3b4c9e5b6d00f122c9f8cd5f06352ed7fbdab7a1",
+        "size_bytes": 20480000,
+        "size_human": "20 MB"
+      },
+      "owner": {
+        "owner_id": "org-nlpai",
+        "owner_name": "NLP AI Inc.",
+        "owner_type": "organization",
+        "contact_email": "support@nlpai.com",
+        "support_url": "https://nlpai.com/support",
+        "documentation_url": "https://docs.nlpai.com/nlp-basic",
+        "verified": true,
+        "trust_level": "gold",
+        "publisher_since": "2025-08-10T00:00:00Z"
+      },
+      "monetization": {
+        "model": "pay-per-use",
+        "currency": "USD",
+        "pricing_tiers": [
+          {
+            "tier": "usage",
+            "label": "Per Call",
+            "cost": 0.01,
+            "description": "Charged per NLP operation."
+          }
+        ],
+        "subscription_plans": []
+      },
+      "runtime_descriptor": {
+        "runtime_env": "Python",
+        "runtime_version": "3.8+",
+        "execution_mode": "local-preferred",
+        "memory_required_mb": 128,
+        "gpu_required": false,
+        "cpu_cores_recommended": 1,
+        "supports_streaming": false,
+        "supports_batch": true,
+        "interface": "INlpService",
+        "entry_point": "nlp.basic.NlpService",
+        "dependencies": [
+          {
+            "name": "numpy",
+            "version": "1.21.2",
+            "type": "required",
+            "url": "https://numpy.org/"
+          },
+          {
+            "name": "pandas",
+            "version": "1.3.3",
+            "type": "optional",
+            "url": "https://pandas.pydata.org/"
+          }
+        ]
+      }
+    },
+    {
+      "capability": {
+        "id": "cap-recipe-agent-001",
+        "name": "Recipe Agent",
+        "slug": "recipe_agent",
+        "description": "Generates recipes based on available ingredients and user preferences.",
+        "category": "Culinary",
+        "tags": ["recipes", "cooking", "AI"],
+        "state": "active",
+        "visibility": "public",
+        "version": "1.0.0",
+        "min_engine_version": "2.0.0",
+        "created_at": "2026-03-10T08:00:00Z",
+        "updated_at": "2026-04-01T10:30:00Z",
+        "deprecated": false,
+        "deprecation_notice": null
+      },
+      "package": {
+        "pack_id": "aipack.recipe.agent",
+        "pack_name": "Recipe Generation Agent",
+        "pack_slug": "recipe-agent",
+        "pack_type": "experience_pack",
+        "bundle_file": "aipack.recipe.agent-1.0.0.pack",
+        "checksum": "sha256:5e4f3a8f5d9c0e0a6181b5e62e5c6c4ed2814ad77f25b5b5",
+        "size_bytes": 30720000,
+        "size_human": "30 MB"
+      },
+      "owner": {
+        "owner_id": "org-recipegen",
+        "owner_name": "RecipeGen Co.",
+        "owner_type": "organization",
+        "contact_email": "support@recipegen.com",
+        "support_url": "https://recipegen.com/support",
+        "documentation_url": "https://docs.recipegen.com/recipe-agent",
+        "verified": true,
+        "trust_level": "gold",
+        "publisher_since": "2025-12-01T00:00:00Z"
+      },
+      "monetization": {
+        "model": "pay-per-use",
+        "currency": "USD",
+        "pricing_tiers": [
+          {
+            "tier": "usage",
+            "label": "Per Recipe Generated",
+            "cost": 0.02,
+            "description": "Charged for each recipe generated."
+          }
+        ],
+        "subscription_plans": []
+      },
+      "runtime_descriptor": {
+        "runtime_env": "Python",
+        "runtime_version": "3.9+",
+        "execution_mode": "local-preferred",
+        "memory_required_mb": 256,
+        "gpu_required": false,
+        "cpu_cores_recommended": 2,
+        "supports_streaming": false,
+        "supports_batch": true,
+        "interface": "IRecipeAgentService",
+        "entry_point": "recipe_agent.core.RecipeAgentService",
+        "dependencies": [
+          {
+            "name": "flask",
+            "version": "2.0.1",
+            "type": "required",
+            "url": "https://flask.palletsprojects.com/"
+          },
+          {
+            "name": "requests",
+            "version": "2.26.0",
+            "type": "optional",
+            "url": "https://docs.python-requests.org/"
+          }
+        ]
+      }
+    },
+    {
+      "capability": {
+        "id": "cap-stt-basic-001",
+        "name": "Basic Speech-to-Text",
+        "slug": "stt_basic",
+        "description": "Converts spoken language into text using basic recognition models.",
+        "category": "Speech Recognition",
+        "tags": ["speech-to-text", "STT", "AI"],
+        "state": "active",
+        "visibility": "public",
+        "version": "1.0.0",
+        "min_engine_version": "2.0.0",
+        "created_at": "2026-03-15T08:00:00Z",
+        "updated_at": "2026-04-01T10:30:00Z",
+        "deprecated": false,
+        "deprecation_notice": null
+      },
+      "package": {
+        "pack_id": "aipack.stt.basic",
+        "pack_name": "Basic STT Pack",
+        "pack_slug": "stt-basic",
+        "pack_type": "experience_pack",
+        "bundle_file": "aipack.stt.basic-1.0.0.pack",
+        "checksum": "sha256:7a4e6bf5923bd873a88e06a1e26bb32091f091a654ef0f15",
+        "size_bytes": 20480000,
+        "size_human": "20 MB"
+      },
+      "owner": {
+        "owner_id": "org-sttinc",
+        "owner_name": "SpeechTech Inc.",
+        "owner_type": "organization",
+        "contact_email": "support@speechtech.com",
+        "support_url": "https://speechtech.com/support",
+        "documentation_url": "https://docs.speechtech.com/stt-basic",
+        "verified": true,
+        "trust_level": "gold",
+        "publisher_since": "2025-07-10T00:00:00Z"
+      },
+      "monetization": {
+        "model": "pay-per-use",
+        "currency": "USD",
+        "pricing_tiers": [
+          {
+            "tier": "usage",
+            "label": "Per Transcript",
+            "cost": 0.05,
+            "description": "Charged for each STT transcript generated."
+          }
+        ],
+        "subscription_plans": []
+      },
+      "runtime_descriptor": {
+        "runtime_env": "Python",
+        "runtime_version": "3.8+",
+        "execution_mode": "local-preferred",
+        "memory_required_mb": 256,
+        "gpu_required": false,
+        "cpu_cores_recommended": 2,
+        "supports_streaming": false,
+        "supports_batch": true,
+        "interface": "ISpeechToTextService",
+        "entry_point": "stt.basic.SpeechToTextService",
+        "dependencies": [
+          {
+            "name": "speech_recognition",
+            "version": "3.8.1",
+            "type": "required",
+            "url": "https://pypi.org/project/SpeechRecognition/"
+          },
+          {
+            "name": "pyaudio",
+            "version": "0.2.11",
+            "type": "optional",
+            "url": "https://people.csail.mit.edu/hubert/pyaudio/"
+          }
+        ]
+      }
+    },
+    {
+      "capability": {
+        "id": "cap-stt-google-001",
+        "name": "Google Speech-to-Text",
+        "slug": "stt_google",
+        "description": "Speech recognition powered by Google Speech-to-Text API.",
+        "category": "Speech Recognition",
+        "tags": ["speech-to-text", "STT", "AI", "Google"],
+        "state": "active",
+        "visibility": "public",
+        "version": "1.0.0",
+        "min_engine_version": "2.0.0",
+        "created_at": "2026-03-20T08:00:00Z",
+        "updated_at": "2026-04-01T10:30:00Z",
+        "deprecated": false,
+        "deprecation_notice": null
+      },
+      "package": {
+        "pack_id": "aipack.stt.google",
+        "pack_name": "Google STT Pack",
+        "pack_slug": "stt-google",
+        "pack_type": "experience_pack",
+        "bundle_file": "aipack.stt.google-1.0.0.pack",
+        "checksum": "sha256:8f1a88bb6cde6d55a40a36e8044783d64abc9e585c261b7c",
+        "size_bytes": 30720000,
+        "size_human": "30 MB"
+      },
+      "owner": {
+        "owner_id": "org-googlestt",
+        "owner_name": "Google Inc.",
+        "owner_type": "organization",
+        "contact_email": "support@google.com",
+        "support_url": "https://cloud.google.com/support",
+        "documentation_url": "https://cloud.google.com/speech-to-text/docs",
+        "verified": true,
+        "trust_level": "gold",
+        "publisher_since": "2025-05-01T00:00:00Z"
+      },
+      "monetization": {
+        "model": "pay-per-use",
+        "currency": "USD",
+        "pricing_tiers": [
+          {
+            "tier": "usage",
+            "label": "Per Call",
+            "cost": 0.06,
+            "description": "Charged per API call to Google STT."
+          }
+        ],
+        "subscription_plans": []
+      },
+      "runtime_descriptor": {
+        "runtime_env": "Python",
+        "runtime_version": "3.9+",
+        "execution_mode": "cloud-preferred",
+        "memory_required_mb": 256,
+        "gpu_required": false,
+        "cpu_cores_recommended": 2,
+        "supports_streaming": true,
+        "supports_batch": true,
+        "interface": "ISpeechToTextService",
+        "entry_point": "stt.google.SpeechToTextGoogleService",
+        "dependencies": [
+          {
+            "name": "google-cloud-speech",
+            "version": "2.6.0",
+            "type": "required",
+            "url": "https://pypi.org/project/google-cloud-speech/"
+          }
+        ]
+      }
+    },
+    {
+      "capability": {
+        "id": "cap-tts-basic-001",
+        "name": "Basic Text-to-Speech",
+        "slug": "tts_basic",
+        "description": "Converts text to spoken language using basic synthetic voices.",
+        "category": "Speech Synthesis",
+        "tags": ["text-to-speech", "TTS", "AI"],
+        "state": "active",
+        "visibility": "public",
+        "version": "1.0.0",
+        "min_engine_version": "2.0.0",
+        "created_at": "2026-03-25T08:00:00Z",
+        "updated_at": "2026-04-01T10:30:00Z",
+        "deprecated": false,
+        "deprecation_notice": null
+      },
+      "package": {
+        "pack_id": "aipack.tts.basic",
+        "pack_name": "Basic TTS Pack",
+        "pack_slug": "tts-basic",
+        "pack_type": "experience_pack",
+        "bundle_file": "aipack.tts.basic-1.0.0.pack",
+        "checksum": "sha256:7d657a1db9417e0c6d38dcf49329e9a028c123b9b5f1ca06",
+        "size_bytes": 20480000,
+        "size_human": "20 MB"
+      },
+      "owner": {
+        "owner_id": "org-ttsinc",
+        "owner_name": "TTS Technologies",
+        "owner_type": "organization",
+        "contact_email": "support@ttstechnologies.com",
+        "support_url": "https://ttstechnologies.com/support",
+        "documentation_url": "https://docs.ttstechnologies.com/basic-tts",
+        "verified": true,
+        "trust_level": "gold",
+        "publisher_since": "2025-09-20T00:00:00Z"
+      },
+      "monetization": {
+        "model": "pay-per-use",
+        "currency": "USD",
+        "pricing_tiers": [
+          {
+            "tier": "usage",
+            "label": "Per Audio Generated",
+            "cost": 0.04,
+            "description": "Charged per audio file generated from text."
+          }
+        ],
+        "subscription_plans": []
+      },
+      "runtime_descriptor": {
+        "runtime_env": "Python",
+        "runtime_version": "3.8+",
+        "execution_mode": "local-preferred",
+        "memory_required_mb": 256,
+        "gpu_required": false,
+        "cpu_cores_recommended": 2,
+        "supports_streaming": false,
+        "supports_batch": true,
+        "interface": "ITextToSpeechService",
+        "entry_point": "tts.basic.TextToSpeechService",
+        "dependencies": [
+          {
+            "name": "gtts",
+            "version": "2.2.1",
+            "type": "required",
+            "url": "https://gtts.readthedocs.io/"
+          }
+        ]
+      }
+    },
+    {
+      "capability": {
+        "id": "cap-tts-google-001",
+        "name": "Google Text-to-Speech",
+        "slug": "tts_google",
+        "description": "Text-to-Speech service powered by Google Text-to-Speech API.",
+        "category": "Speech Synthesis",
+        "tags": ["text-to-speech", "TTS", "AI", "Google"],
+        "state": "active",
+        "visibility": "public",
+        "version": "1.0.0",
+        "min_engine_version": "2.0.0",
+        "created_at": "2026-04-01T08:00:00Z",
+        "updated_at": "2026-04-01T10:30:00Z",
+        "deprecated": false,
+        "deprecation_notice": null
+      },
+      "package": {
+        "pack_id": "aipack.tts.google",
+        "pack_name": "Google TTS Pack",
+        "pack_slug": "tts-google",
+        "pack_type": "experience_pack",
+        "bundle_file": "aipack.tts.google-1.0.0.pack",
+        "checksum": "sha256:94350b78c9e3a1608534f3718fa0f8b5a542bd4b05b182b",
+        "size_bytes": 30720000,
+        "size_human": "30 MB"
+      },
+      "owner": {
+        "owner_id": "org-googletts",
+        "owner_name": "Google Inc.",
+        "owner_type": "organization",
+        "contact_email": "support@google.com",
+        "support_url": "https://cloud.google.com/support",
+        "documentation_url": "https://cloud.google.com/text-to-speech/docs",
+        "verified": true,
+        "trust_level": "gold",
+        "publisher_since": "2025-04-01T00:00:00Z"
+      },
+      "monetization": {
+        "model": "pay-per-use",
+        "currency": "USD",
+        "pricing_tiers": [
+          {
+            "tier": "usage",
+            "label": "Per Audio Generated",
+            "cost": 0.05,
+            "description": "Charged per audio file generated from text."
+          }
+        ],
+        "subscription_plans": []
+      },
+      "runtime_descriptor": {
+        "runtime_env": "Python",
+        "runtime_version": "3.9+",
+        "execution_mode": "cloud-preferred",
+        "memory_required_mb": 256,
+        "gpu_required": false,
+        "cpu_cores_recommended": 2,
+        "supports_streaming": true,
+        "supports_batch": true,
+        "interface": "ITextToSpeechService",
+        "entry_point": "tts.google.TextToSpeechGoogleService",
+        "dependencies": [
+          {
+            "name": "google-cloud-texttospeech",
+            "version": "2.6.0",
+            "type": "required",
+            "url": "https://pypi.org/project/google-cloud-texttospeech/"
+          }
+        ]
+      }
+    }
+  ]
+}
