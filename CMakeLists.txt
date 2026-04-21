@@ -8,6 +8,7 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 include(GNUInstallDirs)
 include(CTest)
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(GLIB REQUIRED gio-2.0 glib-2.0 gobject-2.0)
@@ -120,3 +121,50 @@ add_test(
     NAME edge_gateway_help
     COMMAND edge_gatewayd --help
 )
+
+if(BUILD_TESTING)
+    include(FetchContent)
+    FetchContent_Declare(
+        googletest
+        URL https://github.com/google/googletest/archive/refs/tags/v1.14.0.zip
+    )
+    FetchContent_MakeAvailable(googletest)
+
+    include(GoogleTest)
+
+    add_executable(edgeai_unit_tests
+        tests/capability_router_test.cpp
+        tests/common_utils_test.cpp
+        tests/http_client_test.cpp
+        tests/pack_manager_test.cpp
+        tests/pack_manifest_test.cpp
+        tests/pack_runtime_test.cpp
+        tests/test_support.cpp
+    )
+
+    add_dependencies(edgeai_unit_tests edge_gatewayd next_word_pack)
+
+    target_include_directories(edgeai_unit_tests
+        PRIVATE
+            ${PROJECT_SOURCE_DIR}/tests
+    )
+
+    target_compile_definitions(edgeai_unit_tests
+        PRIVATE
+            EDGEAI_TEST_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
+            EDGEAI_TEST_NEXT_WORD_PACK_LIB="$<TARGET_FILE:next_word_pack>"
+            EDGEAI_TEST_PYTHON_BIN="${Python3_EXECUTABLE}"
+    )
+
+    target_link_libraries(edgeai_unit_tests
+        PRIVATE
+            edgeai_common
+            GTest::gtest_main
+    )
+
+    gtest_discover_tests(
+        edgeai_unit_tests
+        PROPERTIES
+            ENVIRONMENT "EDGEAI_PYTHON=${Python3_EXECUTABLE}"
+    )
+endif()
